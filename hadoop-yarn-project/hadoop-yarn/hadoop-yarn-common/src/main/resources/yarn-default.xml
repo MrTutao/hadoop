@@ -1345,6 +1345,14 @@
   </property>
 
   <property>
+    <description>If set to true, the older application log directory
+    will be considered while fetching application logs.
+    </description>
+    <name>yarn.nodemanager.remote-app-log-dir-include-older</name>
+    <value>true</value>
+  </property>
+
+  <property>
     <description>Generate additional logs about container launches.
     Currently, this creates a copy of the launch script and lists the
     directory contents of the container work dir. When listing directory
@@ -1801,6 +1809,13 @@
       networks.</description>
     <name>yarn.nodemanager.runtime.linux.docker.default-container-network</name>
     <value>host</value>
+  </property>
+
+  <property>
+    <description>The set of runtimes allowed when launching containers using the
+      DockerContainerRuntime.</description>
+    <name>yarn.nodemanager.runtime.linux.docker.allowed-container-runtimes</name>
+    <value>runc</value>
   </property>
 
   <property>
@@ -2591,6 +2606,13 @@
   </property>
 
   <property>
+    <description>The setting that decides the capacity of the queue to hold
+    asynchronous timeline entities.</description>
+    <name>yarn.timeline-service.writer.async.queue.capacity</name>
+    <value>100</value>
+  </property>
+
+  <property>
     <description>Time period till which the application collector will be alive
      in NM, after the  application master container finishes.</description>
     <name>yarn.timeline-service.app-collector.linger-period.ms</name>
@@ -3197,12 +3219,23 @@
   <property>
     <description>Defines how often NMs wake up to upload log files.
     The default value is -1. By default, the logs will be uploaded when
-    the application is finished. By setting this configure, logs can be uploaded
-    periodically when the application is running. The minimum rolling-interval-seconds
-    can be set is 3600.
+    the application is finished. By setting this configuration logs can
+    be uploaded periodically while the application is running.
+    The minimum positive accepted value can be configured by the setting
+    "yarn.nodemanager.log-aggregation.roll-monitoring-interval-seconds.min".
     </description>
     <name>yarn.nodemanager.log-aggregation.roll-monitoring-interval-seconds</name>
     <value>-1</value>
+  </property>
+
+  <property>
+    <description>Defines the positive minimum hard limit for
+    "yarn.nodemanager.log-aggregation.roll-monitoring-interval-seconds".
+    If this configuration has been set less than its default value (3600)
+    the NodeManager may raise a warning.
+    </description>
+    <name>yarn.nodemanager.log-aggregation.roll-monitoring-interval-seconds.min</name>
+    <value>3600</value>
   </property>
 
   <property>
@@ -3324,6 +3357,15 @@
     </description>
     <name>yarn.resourcemanager.opportunistic-container-allocation.enabled</name>
     <value>false</value>
+  </property>
+
+  <property>
+    <description>
+      Maximum number of opportunistic containers to be allocated per
+      Application Master heartbeat.
+    </description>
+    <name>yarn.resourcemanager.opportunistic.max.container-allocation.per.am.heartbeat</name>
+    <value>-1</value>
   </property>
 
   <property>
@@ -4155,5 +4197,29 @@
     </description>
     <name>yarn.nodemanager.csi-driver.names</name>
     <value></value>
+  </property>
+
+  <property>
+    <description>The cleanup interval for activities in milliseconds.</description>
+    <name>yarn.resourcemanager.activities-manager.cleanup-interval-ms</name>
+    <value>5000</value>
+  </property>
+
+  <property>
+    <description>Time to live for scheduler activities in milliseconds.</description>
+    <name>yarn.resourcemanager.activities-manager.scheduler-activities.ttl-ms</name>
+    <value>600000</value>
+  </property>
+
+  <property>
+    <description>Time to live for app activities in milliseconds.</description>
+    <name>yarn.resourcemanager.activities-manager.app-activities.ttl-ms</name>
+    <value>600000</value>
+  </property>
+
+  <property>
+    <description>Max queue length for app activities.</description>
+    <name>yarn.resourcemanager.activities-manager.app-activities.max-queue-length</name>
+    <value>100</value>
   </property>
 </configuration>

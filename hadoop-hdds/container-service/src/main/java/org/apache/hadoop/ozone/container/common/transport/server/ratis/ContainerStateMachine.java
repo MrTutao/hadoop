@@ -25,15 +25,16 @@ import org.apache.commons.io.IOUtils;
 import org.apache.hadoop.hdds.HddsUtils;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos;
 
+import org.apache.hadoop.hdds.scm.container.common.helpers.ContainerNotOpenException;
 import org.apache.hadoop.hdds.scm.container.common.helpers.StorageContainerException;
 import org.apache.hadoop.ozone.container.common.helpers.ContainerUtils;
+import org.apache.hadoop.util.Time;
 import org.apache.ratis.proto.RaftProtos.RaftPeerRole;
-import org.apache.ratis.protocol.RaftGroup;
 import org.apache.ratis.protocol.RaftGroupId;
 import org.apache.ratis.server.RaftServer;
-import org.apache.ratis.server.impl.RaftServerConstants;
 import org.apache.ratis.server.impl.RaftServerProxy;
 import org.apache.ratis.server.protocol.TermIndex;
+import org.apache.ratis.server.raftlog.RaftLog;
 import org.apache.ratis.statemachine.impl.SingleFileSnapshotInfo;
 import org.apache.ratis.thirdparty.com.google.protobuf
     .InvalidProtocolBufferException;
@@ -195,12 +196,12 @@ public class ContainerStateMachine extends BaseStateMachine {
       throws IOException {
     if (snapshot == null) {
       TermIndex empty =
-          TermIndex.newTermIndex(0, RaftServerConstants.INVALID_LOG_INDEX);
+          TermIndex.newTermIndex(0, RaftLog.INVALID_LOG_INDEX);
       LOG.info(
           "The snapshot info is null." + "Setting the last applied index to:"
               + empty);
       setLastAppliedTermIndex(empty);
-      return RaftServerConstants.INVALID_LOG_INDEX;
+      return RaftLog.INVALID_LOG_INDEX;
     }
 
     final File snapshotFile = snapshot.getFile().getPath().toFile();
@@ -243,7 +244,7 @@ public class ContainerStateMachine extends BaseStateMachine {
   public long takeSnapshot() throws IOException {
     TermIndex ti = getLastAppliedTermIndex();
     LOG.info("Taking snapshot at termIndex:" + ti);
-    if (ti != null && ti.getIndex() != RaftServerConstants.INVALID_LOG_INDEX) {
+    if (ti != null && ti.getIndex() != RaftLog.INVALID_LOG_INDEX) {
       final File snapshotFile =
           storage.getSnapshotFile(ti.getTerm(), ti.getIndex());
       LOG.info("Taking a snapshot to file {}", snapshotFile);
@@ -262,12 +263,19 @@ public class ContainerStateMachine extends BaseStateMachine {
   @Override
   public TransactionContext startTransaction(RaftClientRequest request)
       throws IOException {
+    long startTime = Time.monotonicNowNanos();
     final ContainerCommandRequestProto proto =
         getContainerCommandRequestProto(request.getMessage().getContent());
     Preconditions.checkArgument(request.getRaftGroupId().equals(gid));
     try {
       dispatcher.validateContainerCommand(proto);
     } catch (IOException ioe) {
+      if (ioe instanceof ContainerNotOpenException) {
+        metrics.incNumContainerNotOpenVerifyFailures();
+      } else {
+        metrics.incNumStartTransactionVerifyFailures();
+        LOG.error("startTransaction validation failed on leader", ioe);
+      }
       TransactionContext ctxt = TransactionContext.newBuilder()
           .setClientRequest(request)
           .setStateMachine(this)
@@ -297,6 +305,7 @@ public class ContainerStateMachine extends BaseStateMachine {
           .setClientRequest(request)
           .setStateMachine(this)
           .setServerRole(RaftPeerRole.LEADER)
+          .setStateMachineContext(startTime)
           .setStateMachineData(write.getData())
           .setLogData(commitContainerCommandProto.toByteString())
           .build();
@@ -305,6 +314,7 @@ public class ContainerStateMachine extends BaseStateMachine {
           .setClientRequest(request)
           .setStateMachine(this)
           .setServerRole(RaftPeerRole.LEADER)
+          .setStateMachineContext(startTime)
           .setLogData(request.getMessage().getContent())
           .build();
     }
@@ -391,6 +401,8 @@ public class ContainerStateMachine extends BaseStateMachine {
     // Remove the future once it finishes execution from the
     // writeChunkFutureMap.
     writeChunkFuture.thenApply(r -> {
+      metrics.incNumBytesWrittenCount(
+          requestProto.getWriteChunk().getChunkData().getLen());
       writeChunkFutureMap.remove(entryIndex);
       LOG.debug("writeChunk writeStateMachineData  completed: blockId " + write
           .getBlockID() + " logIndex " + entryIndex + " chunkName " + write
@@ -438,19 +450,21 @@ public class ContainerStateMachine extends BaseStateMachine {
   @Override
   public CompletableFuture<Message> query(Message request) {
     try {
-      metrics.incNumReadStateMachineOps();
+      metrics.incNumQueryStateMachineOps();
       final ContainerCommandRequestProto requestProto =
           getContainerCommandRequestProto(request.getContent());
       return CompletableFuture.completedFuture(runCommand(requestProto, null));
     } catch (IOException e) {
-      metrics.incNumReadStateMachineFails();
+      metrics.incNumQueryStateMachineFails();
       return completeExceptionally(e);
     }
   }
 
   private ByteString readStateMachineData(
-      ContainerCommandRequestProto requestProto, long term, long index)
-      throws IOException {
+      ContainerCommandRequestProto requestProto, long term, long index) {
+    // the stateMachine data is not present in the stateMachine cache,
+    // increment the stateMachine cache miss count
+    metrics.incNumReadStateMachineMissCount();
     WriteChunkRequestProto writeChunkRequestProto =
         requestProto.getWriteChunk();
     ContainerProtos.ChunkInfo chunkInfo = writeChunkRequestProto.getChunkData();
@@ -520,6 +534,7 @@ public class ContainerStateMachine extends BaseStateMachine {
   public CompletableFuture<ByteString> readStateMachineData(
       LogEntryProto entry) {
     StateMachineLogEntryProto smLogEntryProto = entry.getStateMachineLogEntry();
+    metrics.incNumReadStateMachineOps();
     if (!getStateMachineData(smLogEntryProto).isEmpty()) {
       return CompletableFuture.completedFuture(ByteString.EMPTY);
     }
@@ -537,6 +552,7 @@ public class ContainerStateMachine extends BaseStateMachine {
                 getCachedStateMachineData(entry.getIndex(), entry.getTerm(),
                     requestProto));
           } catch (ExecutionException e) {
+            metrics.incNumReadStateMachineFails();
             future.completeExceptionally(e);
           }
           return future;
@@ -547,6 +563,7 @@ public class ContainerStateMachine extends BaseStateMachine {
             + " cannot have state machine data");
       }
     } catch (Exception e) {
+      metrics.incNumReadStateMachineFails();
       LOG.error("unable to read stateMachineData:" + e);
       return completeExceptionally(e);
     }
@@ -614,10 +631,20 @@ public class ContainerStateMachine extends BaseStateMachine {
               getCommandExecutor(requestProto));
 
       future.thenAccept(m -> {
+        if (trx.getServerRole() == RaftPeerRole.LEADER) {
+          long startTime = (long) trx.getStateMachineContext();
+          metrics.incPipelineLatency(cmdType,
+              Time.monotonicNowNanos() - startTime);
+        }
+
         final Long previous =
             applyTransactionCompletionMap
                 .put(index, trx.getLogEntry().getTerm());
         Preconditions.checkState(previous == null);
+        if (cmdType == Type.WriteChunk || cmdType == Type.PutSmallFile) {
+          metrics.incNumBytesCommittedCount(
+              requestProto.getWriteChunk().getChunkData().getLen());
+        }
         updateLastApplied();
       });
       return future;
@@ -639,20 +666,34 @@ public class ContainerStateMachine extends BaseStateMachine {
   }
 
   @Override
-  public void notifySlowness(RaftGroup group, RoleInfoProto roleInfoProto) {
-    ratisServer.handleNodeSlowness(group, roleInfoProto);
+  public void notifySlowness(RoleInfoProto roleInfoProto) {
+    ratisServer.handleNodeSlowness(gid, roleInfoProto);
   }
 
   @Override
-  public void notifyExtendedNoLeader(RaftGroup group,
-      RoleInfoProto roleInfoProto) {
-    ratisServer.handleNoLeader(group, roleInfoProto);
+  public void notifyExtendedNoLeader(RoleInfoProto roleInfoProto) {
+    ratisServer.handleNoLeader(gid, roleInfoProto);
   }
 
   @Override
   public void notifyNotLeader(Collection<TransactionContext> pendingEntries)
       throws IOException {
     evictStateMachineCache();
+  }
+
+  @Override
+  public void notifyLogFailed(Throwable t, LogEntryProto failedEntry) {
+    ratisServer.handleNodeLogFailure(gid, t);
+  }
+
+  @Override
+  public CompletableFuture<TermIndex> notifyInstallSnapshotFromLeader(
+      RoleInfoProto roleInfoProto, TermIndex firstTermIndexInLog) {
+    ratisServer.handleInstallSnapshotFromLeader(gid, roleInfoProto,
+        firstTermIndexInLog);
+    final CompletableFuture<TermIndex> future = new CompletableFuture<>();
+    future.complete(firstTermIndexInLog);
+    return future;
   }
 
   @Override

@@ -73,9 +73,13 @@ Returns 0 on success and -1 on error.
 checksum
 --------
 
-Usage: `hadoop fs -checksum URI`
+Usage: `hadoop fs -checksum [-v] URI`
 
 Returns the checksum information of a file.
+
+Options
+
+* The `-v` option displays blocks size for the file.
 
 Example:
 
@@ -264,7 +268,7 @@ Displays a summary of file lengths.
 expunge
 -------
 
-Usage: `hadoop fs -expunge [-immediate]`
+Usage: `hadoop fs -expunge [-immediate] [-fs <path>]`
 
 Permanently delete files in checkpoints older than the retention threshold
 from trash directory, and create new checkpoint.
@@ -281,6 +285,15 @@ This value should be smaller or equal to `fs.trash.interval`.
 
 If the `-immediate` option is passed, all files in the trash for the current
 user are immediately deleted, ignoring the `fs.trash.interval` setting.
+
+If the `-fs` option is passed, the supplied filesystem will be expunged,
+rather than the default filesystem and checkpoint is created.
+
+For example
+
+```
+hadoop fs -expunge --immediate -fs s3a://landsat-pds/
+```
 
 Refer to the
 [HDFS Architecture guide](../hadoop-hdfs/HdfsDesign.html#File_Deletes_and_Undeletes)
@@ -724,7 +737,7 @@ Usage: `hadoop fs -test -[defsz] URI`
 
 Options:
 
-* -d: f the path is a directory, return 0.
+* -d: if the path is a directory, return 0.
 * -e: if the path exists, return 0.
 * -f: if the path is a file, return 0.
 * -s: if the path is not empty, return 0.

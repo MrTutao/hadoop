@@ -30,7 +30,9 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.s3a.S3AFileStatus;
 import org.apache.hadoop.fs.s3a.S3ATestUtils;
+import org.apache.hadoop.fs.s3a.Tristate;
 
 /**
  * MetadataStore unit test for {@link LocalMetadataStore}.
@@ -71,6 +73,11 @@ public class TestLocalMetadataStore extends MetadataStoreTestBase {
   public AbstractMSContract createContract(Configuration conf) throws
       IOException {
     return new LocalMSContract(conf);
+  }
+
+  @Override protected String getPathStringForPrune(String path)
+      throws Exception{
+    return path;
   }
 
   @Test
@@ -168,8 +175,8 @@ public class TestLocalMetadataStore extends MetadataStoreTestBase {
 
   private static void populateEntry(Cache<Path, LocalMetadataEntry> cache,
       Path path) {
-    FileStatus fileStatus = new FileStatus(0, true, 0, 0, 0, path);
-    cache.put(path, new LocalMetadataEntry(new PathMetadata(fileStatus)));
+    S3AFileStatus s3aStatus = new S3AFileStatus(Tristate.UNKNOWN, path, null);
+    cache.put(path, new LocalMetadataEntry(new PathMetadata(s3aStatus)));
   }
 
   private static long sizeOfMap(Cache<Path, LocalMetadataEntry> cache) {
@@ -182,7 +189,7 @@ public class TestLocalMetadataStore extends MetadataStoreTestBase {
       String prefixStr, String pathStr, int leftoverSize) throws IOException {
     populateMap(cache, prefixStr);
     LocalMetadataStore.deleteEntryByAncestor(new Path(prefixStr + pathStr),
-        cache, true);
+        cache, true, getTtlTimeProvider());
     assertEquals(String.format("Cache should have %d entries", leftoverSize),
         leftoverSize, sizeOfMap(cache));
     cache.invalidateAll();
@@ -196,9 +203,8 @@ public class TestLocalMetadataStore extends MetadataStoreTestBase {
   }
 
   @Override
-  protected void verifyDirStatus(FileStatus status) {
-    S3ATestUtils.verifyDirStatus(status, REPLICATION, getModTime(),
-        getAccessTime(), OWNER, GROUP, PERMISSION);
+  protected void verifyDirStatus(S3AFileStatus status) {
+    S3ATestUtils.verifyDirStatus(status, REPLICATION, OWNER);
   }
 
 }

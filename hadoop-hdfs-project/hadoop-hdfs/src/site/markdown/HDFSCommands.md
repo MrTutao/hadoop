@@ -412,7 +412,7 @@ Usage:
 | `-getDatanodeInfo` \<datanode\_host:ipc\_port\> | Get the information about the given datanode. See [Rolling Upgrade document](./HdfsRollingUpgrade.html#dfsadmin_-getDatanodeInfo) for the detail. |
 | `-metasave` filename | Save Namenode's primary data structures to *filename* in the directory specified by hadoop.log.dir property. *filename* is overwritten if it exists. *filename* will contain one line for each of the following<br/>1. Datanodes heart beating with Namenode<br/>2. Blocks waiting to be replicated<br/>3. Blocks currently being replicated<br/>4. Blocks waiting to be deleted |
 | `-triggerBlockReport` `[-incremental]` \<datanode\_host:ipc\_port\> | Trigger a block report for the given datanode. If 'incremental' is specified, it will be otherwise, it will be a full block report. |
-| `-listOpenFiles` `[-blockingDecommission]` `[-path <path>]` | List all open files currently managed by the NameNode along with client name and client machine accessing them. Open files list will be filtered by given type and path. |
+| `-listOpenFiles` `[-blockingDecommission]` `[-path <path>]` | List all open files currently managed by the NameNode along with client name and client machine accessing them. Open files list will be filtered by given type and path. Add -blockingDecommission option if you only want to list open files that are blocking the DataNode decommissioning. |
 | `-help` [cmd] | Displays help for the given command or all commands if none is specified. |
 
 Runs a HDFS dfsadmin client.
@@ -428,27 +428,33 @@ Runs the DFS router. See [Router](../hadoop-hdfs-rbf/HDFSRouterFederation.html#R
 Usage:
 
       hdfs dfsrouteradmin
-          [-add <source> <nameservice1, nameservice2, ...> <destination> [-readonly] [-order HASH|LOCAL|RANDOM|HASH_ALL] -owner <owner> -group <group> -mode <mode>]
-          [-update <source> <nameservice1, nameservice2, ...> <destination> [-readonly] [-order HASH|LOCAL|RANDOM|HASH_ALL] -owner <owner> -group <group> -mode <mode>]
+          [-add <source> <nameservice1, nameservice2, ...> <destination> [-readonly] [-faulttolerant] [-order HASH|LOCAL|RANDOM|HASH_ALL] -owner <owner> -group <group> -mode <mode>]
+          [-update <source> [<nameservice1, nameservice2, ...> <destination>] [-readonly true|false] [-faulttolerant true|false] [-order HASH|LOCAL|RANDOM|HASH_ALL] -owner <owner> -group <group> -mode <mode>]
           [-rm <source>]
           [-ls <path>]
+          [-getDestination <path>]
           [-setQuota <path> -nsQuota <nsQuota> -ssQuota <quota in bytes or quota size string>]
           [-clrQuota <path>]
           [-safemode enter | leave | get]
           [-nameservice disable | enable <nameservice>]
           [-getDisabledNameservices]
+          [-refresh]
+          [-refreshRouterArgs <host:ipc_port> <key> [arg1..argn]]
 
 | COMMAND\_OPTION | Description |
 |:---- |:---- |
 | `-add` *source* *nameservices* *destination* | Add a mount table entry or update if it exists. |
-| `-update` *source* *nameservices* *destination* | Update a mount table entry or create one if it does not exist. |
+| `-update` *source* *nameservices* *destination* | Update a mount table entry attribures. |
 | `-rm` *source* | Remove mount point of specified path. |
 | `-ls` *path* | List mount points under specified path. |
+| `-getDestination` *path* | Get the subcluster where a file is or should be created. |
 | `-setQuota` *path* `-nsQuota` *nsQuota* `-ssQuota` *ssQuota* | Set quota for specified path. See [HDFS Quotas Guide](./HdfsQuotaAdminGuide.html) for the quota detail. |
 | `-clrQuota` *path* | Clear quota of given mount point. See [HDFS Quotas Guide](./HdfsQuotaAdminGuide.html) for the quota detail. |
 | `-safemode` `enter` `leave` `get` | Manually set the Router entering or leaving safe mode. The option *get* will be used for verifying if the Router is in safe mode state. |
 | `-nameservice` `disable` `enable` *nameservice* | Disable/enable  a name service from the federation. If disabled, requests will not go to that name service. |
 | `-getDisabledNameservices` | Get the name services that are disabled in the federation. |
+| `-refresh` | Update mount table cache of the connected router. |
+| `refreshRouterArgs` \<host:ipc\_port\> \<key\> [arg1..argn] | To trigger a runtime-refresh of the resource specified by \<key\> on \<host:ipc\_port\>. For example, to enable white list checking, we just need to send a refresh command other than restart the router server. |
 
 The commands for managing Router-based federation. See [Mount table management](../hadoop-hdfs-rbf/HDFSRouterFederation.html#Mount_table_management) for more info.
 

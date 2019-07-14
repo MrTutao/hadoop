@@ -17,6 +17,8 @@
 
 package org.apache.hadoop.ozone.om.ratis;
 
+import static org.apache.hadoop.ozone.om.exceptions.OMException.STATUS_CODE;
+
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
@@ -24,22 +26,19 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
-import com.google.protobuf.InvalidProtocolBufferException;
-import com.google.protobuf.ServiceException;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.ozone.OmUtils;
 import org.apache.hadoop.ozone.om.OMConfigKeys;
 import org.apache.hadoop.ozone.om.helpers.OMRatisHelper;
-import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos
-    .OMRequest;
-import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos
-    .OMResponse;
+import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos;
+import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos.OMRequest;
+import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos.OMResponse;
 import org.apache.ratis.client.RaftClient;
 import org.apache.ratis.protocol.Message;
 import org.apache.ratis.protocol.RaftClientReply;
+import org.apache.ratis.protocol.RaftException;
 import org.apache.ratis.protocol.RaftGroup;
-import org.apache.ratis.protocol.RaftRetryFailureException;
+import org.apache.ratis.protocol.StateMachineException;
 import org.apache.ratis.retry.RetryPolicies;
 import org.apache.ratis.retry.RetryPolicy;
 import org.apache.ratis.rpc.RpcType;
@@ -48,6 +47,10 @@ import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
 import org.apache.ratis.util.TimeDuration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.google.common.base.Preconditions;
+import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.ServiceException;
 
 /**
  * OM Ratis client to interact with OM Ratis server endpoint.
@@ -128,8 +131,29 @@ public final class OzoneManagerRatisClient implements Closeable {
       CompletableFuture<OMResponse> reply = sendCommandAsync(request);
       return reply.get();
     } catch (ExecutionException | InterruptedException e) {
+      if (e.getCause() instanceof StateMachineException) {
+        OMResponse.Builder omResponse = OMResponse.newBuilder();
+        omResponse.setCmdType(request.getCmdType());
+        omResponse.setSuccess(false);
+        omResponse.setMessage(e.getCause().getMessage());
+        omResponse.setStatus(parseErrorStatus(e.getCause().getMessage()));
+        return omResponse.build();
+      }
       throw new ServiceException(e);
     }
+  }
+
+  private OzoneManagerProtocolProtos.Status parseErrorStatus(String message) {
+    if (message.contains(STATUS_CODE)) {
+      String errorCode = message.substring(message.indexOf(STATUS_CODE) +
+          STATUS_CODE.length());
+      LOG.debug("Parsing error message for error code " +
+          errorCode);
+      return OzoneManagerProtocolProtos.Status.valueOf(errorCode.trim());
+    } else {
+      return OzoneManagerProtocolProtos.Status.INTERNAL_ERROR;
+    }
+
   }
 
   /**
@@ -142,29 +166,25 @@ public final class OzoneManagerRatisClient implements Closeable {
     CompletableFuture<RaftClientReply> raftClientReply =
         sendRequestAsync(request);
 
-    CompletableFuture<OMResponse> omRatisResponse =
-        raftClientReply.whenComplete((reply, e) -> LOG.debug(
-            "received reply {} for request: cmdType={} traceID={} " +
-                "exception: {}", reply, request.getCmdType(),
-            request.getTraceID(), e))
-            .thenApply(reply -> {
-              try {
-                // we need to handle RaftRetryFailure Exception
-                RaftRetryFailureException raftRetryFailureException =
-                    reply.getRetryFailureException();
-                if (raftRetryFailureException != null) {
-                  throw new CompletionException(raftRetryFailureException);
-                }
+    return raftClientReply.whenComplete((reply, e) -> LOG.debug(
+        "received reply {} for request: cmdType={} traceID={} " +
+            "exception: {}", reply, request.getCmdType(),
+        request.getTraceID(), e))
+        .thenApply(reply -> {
+          try {
+            Preconditions.checkNotNull(reply);
+            if (!reply.isSuccess()) {
+              RaftException exception = reply.getException();
+              Preconditions.checkNotNull(exception, "Raft reply failure " +
+                  "but no exception propagated.");
+              throw new CompletionException(exception);
+            }
+            return OMRatisHelper.getOMResponseFromRaftClientReply(reply);
 
-                OMResponse response = OMRatisHelper
-                    .getOMResponseFromRaftClientReply(reply);
-
-                return response;
-              } catch (InvalidProtocolBufferException e) {
-                throw new CompletionException(e);
-              }
-            });
-    return omRatisResponse;
+          } catch (InvalidProtocolBufferException e) {
+            throw new CompletionException(e);
+          }
+        });
   }
 
   /**

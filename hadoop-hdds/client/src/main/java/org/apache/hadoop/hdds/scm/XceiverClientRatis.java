@@ -18,56 +18,62 @@
 
 package org.apache.hadoop.hdds.scm;
 
+import java.io.IOException;
+import java.util.Collection;
+import java.util.List;
+import java.util.Objects;
+import java.util.OptionalLong;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
+
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdds.HddsUtils;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos;
-import org.apache.hadoop.hdds.security.x509.SecurityConfig;
-
-import io.opentracing.Scope;
-import io.opentracing.util.GlobalTracer;
-import org.apache.ratis.grpc.GrpcTlsConfig;
-import org.apache.ratis.proto.RaftProtos;
-import org.apache.ratis.protocol.RaftRetryFailureException;
-import org.apache.ratis.retry.RetryPolicy;
-import org.apache.ratis.thirdparty.com.google.protobuf
-    .InvalidProtocolBufferException;
-import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.ContainerCommandRequestProto;
+import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.ContainerCommandResponseProto;
+import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
 import org.apache.hadoop.hdds.scm.client.HddsClientUtils;
 import org.apache.hadoop.hdds.scm.pipeline.Pipeline;
-import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
-    .ContainerCommandRequestProto;
-import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
-    .ContainerCommandResponseProto;
-import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
+import org.apache.hadoop.hdds.security.x509.SecurityConfig;
 import org.apache.hadoop.hdds.tracing.TracingUtil;
-
+import org.apache.hadoop.util.Time;
 import org.apache.ratis.RatisHelper;
 import org.apache.ratis.client.RaftClient;
+import org.apache.ratis.grpc.GrpcTlsConfig;
+import org.apache.ratis.proto.RaftProtos;
+import org.apache.ratis.protocol.GroupMismatchException;
 import org.apache.ratis.protocol.RaftClientReply;
+import org.apache.ratis.protocol.RaftException;
+import org.apache.ratis.retry.RetryPolicy;
 import org.apache.ratis.rpc.RpcType;
 import org.apache.ratis.rpc.SupportedRpcType;
 import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
+import org.apache.ratis.thirdparty.com.google.protobuf.InvalidProtocolBufferException;
 import org.apache.ratis.util.TimeDuration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+
+import io.opentracing.Scope;
+import io.opentracing.util.GlobalTracer;
 
 /**
  * An abstract implementation of {@link XceiverClientSpi} using Ratis.
  * The underlying RPC mechanism can be chosen via the constructor.
  */
 public final class XceiverClientRatis extends XceiverClientSpi {
-  static final Logger LOG = LoggerFactory.getLogger(XceiverClientRatis.class);
+  public static final Logger LOG =
+      LoggerFactory.getLogger(XceiverClientRatis.class);
 
   public static XceiverClientRatis newXceiverClientRatis(
       org.apache.hadoop.hdds.scm.pipeline.Pipeline pipeline,
@@ -98,8 +104,7 @@ public final class XceiverClientRatis extends XceiverClientSpi {
   // Map to track commit index at every server
   private final ConcurrentHashMap<UUID, Long> commitInfoMap;
 
-  // create a separate RaftClient for watchForCommit API
-  private RaftClient watchClient;
+  private XceiverClientMetrics metrics;
 
   /**
    * Constructs a client.
@@ -113,9 +118,9 @@ public final class XceiverClientRatis extends XceiverClientSpi {
     this.maxOutstandingRequests = maxOutStandingChunks;
     this.retryPolicy = retryPolicy;
     commitInfoMap = new ConcurrentHashMap<>();
-    watchClient = null;
     this.tlsConfig = tlsConfig;
     this.clientRequestTimeout = timeout;
+    metrics = XceiverClientManager.getXceiverClientMetrics();
   }
 
   private void updateCommitInfosMap(
@@ -182,9 +187,6 @@ public final class XceiverClientRatis extends XceiverClientSpi {
     if (c != null) {
       closeRaftClient(c);
     }
-    if (watchClient != null) {
-      closeRaftClient(watchClient);
-    }
   }
 
   private void closeRaftClient(RaftClient raftClient) {
@@ -197,6 +199,12 @@ public final class XceiverClientRatis extends XceiverClientSpi {
 
   private RaftClient getClient() {
     return Objects.requireNonNull(client.get(), "client is null");
+  }
+
+
+  @VisibleForTesting
+  public ConcurrentHashMap<UUID, Long> getCommitInfoMap() {
+    return commitInfoMap;
   }
 
   private CompletableFuture<RaftClientReply> sendRequestAsync(
@@ -244,31 +252,18 @@ public final class XceiverClientRatis extends XceiverClientSpi {
       return clientReply;
     }
     LOG.debug("commit index : {} watch timeout : {}", index, timeout);
-    // create a new RaftClient instance for watch request
-    if (watchClient == null) {
-      watchClient =
-          RatisHelper.newRaftClient(rpcType, getPipeline(), retryPolicy,
-              maxOutstandingRequests, tlsConfig, clientRequestTimeout);
-    }
-    CompletableFuture<RaftClientReply> replyFuture = watchClient
-        .sendWatchAsync(index, RaftProtos.ReplicationLevel.ALL_COMMITTED);
     RaftClientReply reply;
     try {
+      CompletableFuture<RaftClientReply> replyFuture = getClient()
+          .sendWatchAsync(index, RaftProtos.ReplicationLevel.ALL_COMMITTED);
       replyFuture.get(timeout, TimeUnit.MILLISECONDS);
-    } catch (TimeoutException toe) {
-      LOG.warn("3 way commit failed ", toe);
-
-      closeRaftClient(watchClient);
-      // generate a new raft client instance again so that next watch request
-      // does not get blocked for the previous one
-
-      // TODO : need to remove the code to create the new RaftClient instance
-      // here once the watch request bypassing sliding window in Raft Client
-      // gets fixed.
-      watchClient =
-          RatisHelper.newRaftClient(rpcType, getPipeline(), retryPolicy,
-              maxOutstandingRequests, tlsConfig, clientRequestTimeout);
-      reply = watchClient
+    } catch (Exception e) {
+      Throwable t = HddsClientUtils.checkForException(e);
+      LOG.warn("3 way commit failed on pipeline {}", pipeline, e);
+      if (t instanceof GroupMismatchException) {
+        throw e;
+      }
+      reply = getClient()
           .sendWatchAsync(index, RaftProtos.ReplicationLevel.MAJORITY_COMMITTED)
           .get(timeout, TimeUnit.MILLISECONDS);
       List<RaftProtos.CommitInfoProto> commitInfoProtoList =
@@ -283,8 +278,9 @@ public final class XceiverClientRatis extends XceiverClientSpi {
         // replication.
         commitInfoMap.remove(address);
         LOG.info(
-            "Could not commit " + index + " to all the nodes. Server " + address
-                + " has failed." + " Committed by majority.");
+            "Could not commit index {} on pipeline {} to all the nodes. " +
+            "Server {} has failed. Committed by majority.",
+            index, pipeline, address);
       });
     }
     clientReply.setLogIndex(index);
@@ -301,47 +297,52 @@ public final class XceiverClientRatis extends XceiverClientSpi {
   public XceiverClientReply sendCommandAsync(
       ContainerCommandRequestProto request) {
     XceiverClientReply asyncReply = new XceiverClientReply(null);
+    long requestTime = Time.monotonicNowNanos();
     CompletableFuture<RaftClientReply> raftClientReply =
         sendRequestAsync(request);
+    metrics.incrPendingContainerOpsMetrics(request.getCmdType());
     CompletableFuture<ContainerCommandResponseProto> containerCommandResponse =
-        raftClientReply.whenComplete((reply, e) -> LOG.debug(
-            "received reply {} for request: cmdType={} containerID={}"
-                + " pipelineID={} traceID={} exception: {}", reply,
-            request.getCmdType(), request.getContainerID(),
-            request.getPipelineID(), request.getTraceID(), e))
-            .thenApply(reply -> {
-              try {
-                // we need to handle RaftRetryFailure Exception
-                RaftRetryFailureException raftRetryFailureException =
-                    reply.getRetryFailureException();
-                if (raftRetryFailureException != null) {
-                  // in case of raft retry failure, the raft client is
-                  // not able to connect to the leader hence the pipeline
-                  // can not be used but this instance of RaftClient will close
-                  // and refreshed again. In case the client cannot connect to
-                   // leader, getClient call will fail.
+        raftClientReply.whenComplete((reply, e) -> {
+          LOG.debug("received reply {} for request: cmdType={} containerID={}"
+                  + " pipelineID={} traceID={} exception: {}", reply,
+              request.getCmdType(), request.getContainerID(),
+              request.getPipelineID(), request.getTraceID(), e);
+          metrics.decrPendingContainerOpsMetrics(request.getCmdType());
+          metrics.addContainerOpsLatency(request.getCmdType(),
+              Time.monotonicNowNanos() - requestTime);
+        }).thenApply(reply -> {
+          try {
+            if (!reply.isSuccess()) {
+              // in case of raft retry failure, the raft client is
+              // not able to connect to the leader hence the pipeline
+              // can not be used but this instance of RaftClient will close
+              // and refreshed again. In case the client cannot connect to
+              // leader, getClient call will fail.
 
-                  // No need to set the failed Server ID here. Ozone client
-                  // will directly exclude this pipeline in next allocate block
-                  // to SCM as in this case, it is the raft client which is not
-                  // able to connect to leader in the pipeline, though the
-                  // pipeline can still be functional.
-                  throw new CompletionException(raftRetryFailureException);
-                }
-                ContainerCommandResponseProto response =
-                    ContainerCommandResponseProto
-                        .parseFrom(reply.getMessage().getContent());
-                UUID serverId = RatisHelper.toDatanodeId(reply.getReplierId());
-                if (response.getResult() == ContainerProtos.Result.SUCCESS) {
-                  updateCommitInfosMap(reply.getCommitInfos());
-                }
-                asyncReply.setLogIndex(reply.getLogIndex());
-                addDatanodetoReply(serverId, asyncReply);
-                return response;
-              } catch (InvalidProtocolBufferException e) {
-                throw new CompletionException(e);
-              }
-            });
+              // No need to set the failed Server ID here. Ozone client
+              // will directly exclude this pipeline in next allocate block
+              // to SCM as in this case, it is the raft client which is not
+              // able to connect to leader in the pipeline, though the
+              // pipeline can still be functional.
+              RaftException exception = reply.getException();
+              Preconditions.checkNotNull(exception, "Raft reply failure but " +
+                  "no exception propagated.");
+              throw new CompletionException(exception);
+            }
+            ContainerCommandResponseProto response =
+                ContainerCommandResponseProto
+                    .parseFrom(reply.getMessage().getContent());
+            UUID serverId = RatisHelper.toDatanodeId(reply.getReplierId());
+            if (response.getResult() == ContainerProtos.Result.SUCCESS) {
+              updateCommitInfosMap(reply.getCommitInfos());
+            }
+            asyncReply.setLogIndex(reply.getLogIndex());
+            addDatanodetoReply(serverId, asyncReply);
+            return response;
+          } catch (InvalidProtocolBufferException e) {
+            throw new CompletionException(e);
+          }
+        });
     asyncReply.setResponse(containerCommandResponse);
     return asyncReply;
   }

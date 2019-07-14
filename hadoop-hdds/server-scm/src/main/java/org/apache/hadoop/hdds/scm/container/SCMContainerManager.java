@@ -43,6 +43,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
@@ -132,6 +133,16 @@ public class SCMContainerManager implements ContainerManager {
   }
 
   @Override
+  public Set<ContainerID> getContainerIDs() {
+    lock.lock();
+    try {
+      return containerStateManager.getAllContainerIDs();
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  @Override
   public List<ContainerInfo> getContainers() {
     lock.lock();
     try {
@@ -167,6 +178,16 @@ public class SCMContainerManager implements ContainerManager {
   }
 
   /**
+   * Get number of containers in the given state.
+   *
+   * @param state {@link LifeCycleState}
+   * @return Count
+   */
+  public Integer getContainerCountByState(LifeCycleState state) {
+    return containerStateManager.getContainerCountByState(state);
+  }
+
+  /**
    * {@inheritDoc}
    */
   @Override
@@ -190,7 +211,7 @@ public class SCMContainerManager implements ContainerManager {
       Collections.sort(containersIds);
 
       return containersIds.stream()
-          .filter(id -> id.getId() >= startId)
+          .filter(id -> id.getId() > startId)
           .limit(count)
           .map(id -> {
             try {
@@ -226,7 +247,17 @@ public class SCMContainerManager implements ContainerManager {
           containerStateManager.allocateContainer(pipelineManager, type,
               replicationFactor, owner);
       // Add container to DB.
-      addContainerToDB(containerInfo);
+      try {
+        addContainerToDB(containerInfo);
+      } catch (IOException ex) {
+        // When adding to DB failed, we are removing from containerStateMap.
+        // We should also remove from pipeline2Container Map in
+        // PipelineStateManager.
+        pipelineManager.removeContainerFromPipeline(
+            containerInfo.getPipelineID(),
+            new ContainerID(containerInfo.getContainerID()));
+        throw ex;
+      }
       return containerInfo;
     } finally {
       lock.unlock();
@@ -275,18 +306,20 @@ public class SCMContainerManager implements ContainerManager {
     // Should we return the updated ContainerInfo instead of LifeCycleState?
     lock.lock();
     try {
-      ContainerInfo container = containerStateManager.getContainer(containerID);
-      ContainerInfo updatedContainer =
-          updateContainerStateInternal(containerID, event);
-      if (updatedContainer.getState() != LifeCycleState.OPEN
-          && container.getState() == LifeCycleState.OPEN) {
+      final ContainerInfo container = containerStateManager
+          .getContainer(containerID);
+      final LifeCycleState oldState = container.getState();
+      containerStateManager.updateContainerState(containerID, event);
+      final LifeCycleState newState = container.getState();
+
+      if (oldState == LifeCycleState.OPEN && newState != LifeCycleState.OPEN) {
         pipelineManager
-            .removeContainerFromPipeline(updatedContainer.getPipelineID(),
+            .removeContainerFromPipeline(container.getPipelineID(),
                 containerID);
       }
       final byte[] dbKey = Longs.toByteArray(containerID.getId());
-      containerStore.put(dbKey, updatedContainer.getProtobuf().toByteArray());
-      return updatedContainer.getState();
+      containerStore.put(dbKey, container.getProtobuf().toByteArray());
+      return newState;
     } catch (ContainerNotFoundException cnfe) {
       throw new SCMException(
           "Failed to update container state"
@@ -296,11 +329,6 @@ public class SCMContainerManager implements ContainerManager {
     } finally {
       lock.unlock();
     }
-  }
-
-  private ContainerInfo updateContainerStateInternal(ContainerID containerID,
-      HddsProtos.LifeCycleEvent event) throws IOException {
-    return containerStateManager.updateContainerState(containerID, event);
   }
 
 
@@ -359,18 +387,17 @@ public class SCMContainerManager implements ContainerManager {
 
   public ContainerInfo getMatchingContainer(final long sizeRequired,
       String owner, Pipeline pipeline, List<ContainerID> excludedContainers) {
+    NavigableSet<ContainerID> containerIDs;
     try {
-      //TODO: #CLUTIL See if lock is required here
-      NavigableSet<ContainerID> containerIDs =
-          pipelineManager.getContainersInPipeline(pipeline.getId());
+      synchronized (pipeline) {
+        //TODO: #CLUTIL See if lock is required here
+        containerIDs =
+            pipelineManager.getContainersInPipeline(pipeline.getId());
 
-      containerIDs = getContainersForOwner(containerIDs, owner);
-      if (containerIDs.size() < numContainerPerOwnerInPipeline) {
-        synchronized (pipeline) {
+        containerIDs = getContainersForOwner(containerIDs, owner);
+        if (containerIDs.size() < numContainerPerOwnerInPipeline) {
           // TODO: #CLUTIL Maybe we can add selection logic inside synchronized
           // as well
-          containerIDs = getContainersForOwner(
-              pipelineManager.getContainersInPipeline(pipeline.getId()), owner);
           if (containerIDs.size() < numContainerPerOwnerInPipeline) {
             ContainerInfo containerInfo =
                 containerStateManager.allocateContainer(pipelineManager, owner,
@@ -423,6 +450,8 @@ public class SCMContainerManager implements ContainerManager {
     } catch (IOException ex) {
       // If adding to containerStore fails, we should remove the container
       // from in-memory map.
+      LOG.error("Add Container to DB failed for ContainerID #{}",
+          containerInfo.getContainerID());
       try {
         containerStateManager.removeContainer(containerInfo.containerID());
       } catch (ContainerNotFoundException cnfe) {
@@ -441,15 +470,17 @@ public class SCMContainerManager implements ContainerManager {
    */
   private NavigableSet<ContainerID> getContainersForOwner(
       NavigableSet<ContainerID> containerIDs, String owner) {
-    for (ContainerID cid : containerIDs) {
+    Iterator<ContainerID> containerIDIterator = containerIDs.iterator();
+    while (containerIDIterator.hasNext()) {
+      ContainerID cid = containerIDIterator.next();
       try {
         if (!getContainer(cid).getOwner().equals(owner)) {
-          containerIDs.remove(cid);
+          containerIDIterator.remove();
         }
       } catch (ContainerNotFoundException e) {
         LOG.error("Could not find container info for container id={} {}", cid,
             e);
-        containerIDs.remove(cid);
+        containerIDIterator.remove();
       }
     }
     return containerIDs;

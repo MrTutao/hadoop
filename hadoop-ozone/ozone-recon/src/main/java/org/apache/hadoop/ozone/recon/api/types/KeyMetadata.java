@@ -18,33 +18,63 @@
 package org.apache.hadoop.ozone.recon.api.types;
 
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
 import javax.xml.bind.annotation.XmlElement;
+import javax.xml.bind.annotation.XmlRootElement;
 import javax.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
 
 /**
  * Metadata object represents one key in the object store.
  */
+@XmlRootElement (name = "KeyMetadata")
 @XmlAccessorType(XmlAccessType.FIELD)
 public class KeyMetadata {
 
+  @XmlElement(name = "Volume")
+  private String volume;
+
+  @XmlElement(name = "Bucket")
+  private String bucket;
+
   @XmlElement(name = "Key")
-  private String key; // or the Object Name
+  private String key;
+
+  @XmlElement(name = "DataSize")
+  private long dataSize;
+
+  @XmlElement(name = "Versions")
+  private List<Long> versions;
+
+  @XmlElement(name = "Blocks")
+  private Map<Long, List<ContainerBlockMetadata>> blockIds;
 
   @XmlJavaTypeAdapter(IsoDateAdapter.class)
-  @XmlElement(name = "LastModified")
-  private Instant lastModified;
+  @XmlElement(name = "CreationTime")
+  private Instant creationTime;
 
-  @XmlElement(name = "ETag")
-  private String eTag;
+  @XmlJavaTypeAdapter(IsoDateAdapter.class)
+  @XmlElement(name = "ModificationTime")
+  private Instant modificationTime;
 
-  @XmlElement(name = "Size")
-  private long size;
+  public String getVolume() {
+    return volume;
+  }
 
-  @XmlElement(name = "StorageClass")
-  private String storageClass;
+  public void setVolume(String volume) {
+    this.volume = volume;
+  }
+
+  public String getBucket() {
+    return bucket;
+  }
+
+  public void setBucket(String bucket) {
+    this.bucket = bucket;
+  }
 
   public String getKey() {
     return key;
@@ -54,35 +84,64 @@ public class KeyMetadata {
     this.key = key;
   }
 
-  public Instant getLastModified() {
-    return lastModified;
+  public long getDataSize() {
+    return dataSize;
   }
 
-  public void setLastModified(Instant lastModified) {
-    this.lastModified = lastModified;
+  public void setDataSize(long dataSize) {
+    this.dataSize = dataSize;
   }
 
-  public String getETag() {
-    return eTag;
+  public Instant getCreationTime() {
+    return creationTime;
   }
 
-  public void setETag(String tag) {
-    this.eTag = tag;
+  public void setCreationTime(Instant creationTime) {
+    this.creationTime = creationTime;
   }
 
-  public long getSize() {
-    return size;
+  public Instant getModificationTime() {
+    return modificationTime;
   }
 
-  public void setSize(long size) {
-    this.size = size;
+  public void setModificationTime(Instant modificationTime) {
+    this.modificationTime = modificationTime;
   }
 
-  public String getStorageClass() {
-    return storageClass;
+  public List<Long> getVersions() {
+    return versions;
   }
 
-  public void setStorageClass(String storageClass) {
-    this.storageClass = storageClass;
+  public void setVersions(List<Long> versions) {
+    this.versions = versions;
+  }
+
+  public Map<Long, List<ContainerBlockMetadata>> getBlockIds() {
+    return blockIds;
+  }
+
+  public void setBlockIds(Map<Long, List<ContainerBlockMetadata>> blockIds) {
+    this.blockIds = blockIds;
+  }
+
+  /**
+   * Class to hold ContainerID and BlockID.
+   */
+  public static class ContainerBlockMetadata {
+    private long containerID;
+    private long localID;
+
+    public ContainerBlockMetadata(long containerID, long localID) {
+      this.containerID = containerID;
+      this.localID = localID;
+    }
+
+    public long getContainerID() {
+      return containerID;
+    }
+
+    public long getLocalID() {
+      return localID;
+    }
   }
 }

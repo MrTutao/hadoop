@@ -30,6 +30,7 @@ import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.StorageType;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
     .ChecksumType;
+import org.apache.hadoop.hdds.scm.ByteStringHelper;
 import org.apache.hadoop.hdds.scm.client.HddsClientUtils;
 import org.apache.hadoop.hdds.scm.protocol.StorageContainerLocationProtocol;
 import org.apache.hadoop.hdds.tracing.TracingUtil;
@@ -65,12 +66,12 @@ import org.apache.hadoop.ozone.om.helpers.OmVolumeArgs;
 import org.apache.hadoop.ozone.om.helpers.OpenKeySession;
 import org.apache.hadoop.ozone.om.helpers.S3SecretValue;
 import org.apache.hadoop.ozone.om.helpers.ServiceInfo;
+import org.apache.hadoop.ozone.om.helpers.OzoneFileStatus;
 import org.apache.hadoop.ozone.om.protocol.OzoneManagerProtocol;
 import org.apache.hadoop.ozone.om.protocolPB
     .OzoneManagerProtocolClientSideTranslatorPB;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.ozone.OzoneAcl;
-import org.apache.hadoop.ozone.om.OMConfigKeys;
 import org.apache.hadoop.ozone.protocol.proto
     .OzoneManagerProtocolProtos.ServicePort;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
@@ -82,6 +83,11 @@ import org.apache.hadoop.hdds.scm.protocolPB
 import org.apache.hadoop.hdds.scm.protocolPB
     .StorageContainerLocationProtocolPB;
 import org.apache.hadoop.ozone.security.OzoneTokenIdentifier;
+import org.apache.hadoop.ozone.security.acl.IAccessAuthorizer.ACLIdentityType;
+import org.apache.hadoop.ozone.security.acl.IAccessAuthorizer.ACLType;
+import org.apache.hadoop.ozone.security.acl.OzoneAclConfig;
+import org.apache.hadoop.ozone.security.acl.OzoneObj;
+import org.apache.hadoop.ozone.web.utils.OzoneUtils;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.io.Text;
@@ -92,6 +98,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -116,14 +123,16 @@ public class RpcClient implements ClientProtocol {
   private final int bytesPerChecksum;
   private boolean verifyChecksum;
   private final UserGroupInformation ugi;
-  private final OzoneAcl.OzoneACLRights userRights;
-  private final OzoneAcl.OzoneACLRights groupRights;
+  private final ACLType userRights;
+  private final ACLType groupRights;
   private final long streamBufferFlushSize;
   private final long streamBufferMaxSize;
   private final long blockSize;
   private final long watchTimeout;
   private final ClientId clientId = ClientId.randomId();
   private final int maxRetryCount;
+  private final long retryInterval;
+  private Text dtService;
 
    /**
     * Creates RpcClient instance with the given configuration.
@@ -134,10 +143,11 @@ public class RpcClient implements ClientProtocol {
     Preconditions.checkNotNull(conf);
     this.conf = new OzoneConfiguration(conf);
     this.ugi = UserGroupInformation.getCurrentUser();
-    this.userRights = conf.getEnum(OMConfigKeys.OZONE_OM_USER_RIGHTS,
-        OMConfigKeys.OZONE_OM_USER_RIGHTS_DEFAULT);
-    this.groupRights = conf.getEnum(OMConfigKeys.OZONE_OM_GROUP_RIGHTS,
-        OMConfigKeys.OZONE_OM_GROUP_RIGHTS_DEFAULT);
+    // Get default acl rights for user and group.
+    OzoneAclConfig aclConfig = this.conf.getObject(OzoneAclConfig.class);
+    this.userRights = aclConfig.getUserDefaultRights();
+    this.groupRights = aclConfig.getGroupDefaultRights();
+
     this.ozoneManagerClient = new OzoneManagerProtocolClientSideTranslatorPB(
         this.conf, clientId.toString(), ugi);
     long scmVersion =
@@ -152,7 +162,8 @@ public class RpcClient implements ClientProtocol {
                 scmAddress, ugi, conf, NetUtils.getDefaultSocketFactory(conf),
                 Client.getRpcTimeout(conf)));
     this.storageContainerLocationClient =
-        TracingUtil.createProxy(client, StorageContainerLocationProtocol.class);
+        TracingUtil.createProxy(client, StorageContainerLocationProtocol.class,
+            conf);
     this.xceiverClientManager = new XceiverClientManager(conf);
 
     int configuredChunkSize = (int) conf
@@ -208,6 +219,14 @@ public class RpcClient implements ClientProtocol {
     maxRetryCount =
         conf.getInt(OzoneConfigKeys.OZONE_CLIENT_MAX_RETRIES, OzoneConfigKeys.
             OZONE_CLIENT_MAX_RETRIES_DEFAULT);
+    retryInterval = OzoneUtils.getTimeDurationInMS(conf,
+        OzoneConfigKeys.OZONE_CLIENT_RETRY_INTERVAL,
+        OzoneConfigKeys.OZONE_CLIENT_RETRY_INTERVAL_DEFAULT);
+    dtService = getOMProxyProvider().getCurrentProxyDelegationToken();
+    boolean isUnsafeByteOperationsEnabled = conf.getBoolean(
+        OzoneConfigKeys.OZONE_UNSAFEBYTEOPERATIONS_ENABLED,
+        OzoneConfigKeys.OZONE_UNSAFEBYTEOPERATIONS_ENABLED_DEFAULT);
+    ByteStringHelper.init(isUnsafeByteOperationsEnabled);
   }
 
   private InetSocketAddress getScmAddressForClient() throws IOException {
@@ -239,13 +258,13 @@ public class RpcClient implements ClientProtocol {
         OzoneQuota.parseQuota(volArgs.getQuota()).sizeInBytes();
     List<OzoneAcl> listOfAcls = new ArrayList<>();
     //User ACL
-    listOfAcls.add(new OzoneAcl(OzoneAcl.OzoneACLType.USER,
+    listOfAcls.add(new OzoneAcl(ACLIdentityType.USER,
             owner, userRights));
     //Group ACLs of the User
     List<String> userGroups = Arrays.asList(UserGroupInformation
         .createRemoteUser(owner).getGroupNames());
     userGroups.stream().forEach((group) -> listOfAcls.add(
-        new OzoneAcl(OzoneAcl.OzoneACLType.GROUP, group, groupRights)));
+        new OzoneAcl(ACLIdentityType.GROUP, group, groupRights)));
     //ACLs from VolumeArgs
     if(volArgs.getAcls() != null) {
       listOfAcls.addAll(volArgs.getAcls());
@@ -264,8 +283,12 @@ public class RpcClient implements ClientProtocol {
       builder.addOzoneAcls(OMPBHelper.convertOzoneAcl(ozoneAcl));
     }
 
-    LOG.info("Creating Volume: {}, with {} as owner and quota set to {} bytes.",
-        volumeName, owner, quota);
+    if (volArgs.getQuota() == null) {
+      LOG.info("Creating Volume: {}, with {} as owner.", volumeName, owner);
+    } else {
+      LOG.info("Creating Volume: {}, with {} as owner "
+              + "and quota set to {} bytes.", volumeName, owner, quota);
+    }
     ozoneManagerClient.createVolume(builder.build());
   }
 
@@ -380,15 +403,7 @@ public class RpcClient implements ClientProtocol {
           .setKeyName(bucketArgs.getEncryptionKey()).build();
     }
 
-    List<OzoneAcl> listOfAcls = new ArrayList<>();
-    //User ACL
-    listOfAcls.add(new OzoneAcl(OzoneAcl.OzoneACLType.USER,
-        ugi.getUserName(), userRights));
-    //Group ACLs of the User
-    List<String> userGroups = Arrays.asList(UserGroupInformation
-        .createRemoteUser(ugi.getUserName()).getGroupNames());
-    userGroups.stream().forEach((group) -> listOfAcls.add(
-        new OzoneAcl(OzoneAcl.OzoneACLType.GROUP, group, groupRights)));
+    List<OzoneAcl> listOfAcls = getAclList();
     //ACLs from BucketArgs
     if(bucketArgs.getAcls() != null) {
       listOfAcls.addAll(bucketArgs.getAcls());
@@ -410,6 +425,16 @@ public class RpcClient implements ClientProtocol {
             "Storage Type set to {} and Encryption set to {} ",
         volumeName, bucketName, isVersionEnabled, storageType, bek != null);
     ozoneManagerClient.createBucket(builder.build());
+  }
+
+  /**
+   * Helper function to get default acl list for current user.
+   *
+   * @return listOfAcls
+   * */
+  private List<OzoneAcl> getAclList() {
+    return OzoneUtils.getAclList(ugi.getUserName(), ugi.getGroups(),
+        userRights, groupRights);
   }
 
   @Override
@@ -452,12 +477,11 @@ public class RpcClient implements ClientProtocol {
     Token<OzoneTokenIdentifier> token =
         ozoneManagerClient.getDelegationToken(renewer);
     if (token != null) {
-      Text dtService =
-          getOMProxyProvider().getProxy().getDelegationTokenService();
       token.setService(dtService);
-      LOG.debug("Created token {}", token);
+      LOG.debug("Created token {} for dtService {}", token, dtService);
     } else {
-      LOG.debug("Cannot get ozone delegation token from {}", renewer);
+      LOG.debug("Cannot get ozone delegation token for renewer {} to access " +
+          "service {}", renewer, dtService);
     }
     return token;
   }
@@ -605,40 +629,11 @@ public class RpcClient implements ClientProtocol {
         .setType(HddsProtos.ReplicationType.valueOf(type.toString()))
         .setFactor(HddsProtos.ReplicationFactor.valueOf(factor.getValue()))
         .addAllMetadata(metadata)
+        .setAcls(getAclList())
         .build();
 
     OpenKeySession openKey = ozoneManagerClient.openKey(keyArgs);
-    KeyOutputStream keyOutputStream =
-        new KeyOutputStream.Builder()
-            .setHandler(openKey)
-            .setXceiverClientManager(xceiverClientManager)
-            .setOmClient(ozoneManagerClient)
-            .setChunkSize(chunkSize)
-            .setRequestID(requestId)
-            .setType(HddsProtos.ReplicationType.valueOf(type.toString()))
-            .setFactor(HddsProtos.ReplicationFactor.valueOf(factor.getValue()))
-            .setStreamBufferFlushSize(streamBufferFlushSize)
-            .setStreamBufferMaxSize(streamBufferMaxSize)
-            .setWatchTimeout(watchTimeout)
-            .setBlockSize(blockSize)
-            .setChecksumType(checksumType)
-            .setBytesPerChecksum(bytesPerChecksum)
-            .setMaxRetryCount(maxRetryCount)
-            .build();
-    keyOutputStream.addPreallocateBlocks(
-        openKey.getKeyInfo().getLatestVersionLocations(),
-        openKey.getOpenVersion());
-    final FileEncryptionInfo feInfo = keyOutputStream
-        .getFileEncryptionInfo();
-    if (feInfo != null) {
-      KeyProvider.KeyVersion decrypted = getDEK(feInfo);
-      final CryptoOutputStream cryptoOut = new CryptoOutputStream(
-          keyOutputStream, OzoneKMSUtil.getCryptoCodec(conf, feInfo),
-          decrypted.getMaterial(), feInfo.getIV());
-      return new OzoneOutputStream(cryptoOut);
-    } else {
-      return new OzoneOutputStream(keyOutputStream);
-    }
+    return createOutputStream(openKey, requestId, type, factor);
   }
 
   private KeyProvider.KeyVersion getDEK(FileEncryptionInfo feInfo)
@@ -646,10 +641,8 @@ public class RpcClient implements ClientProtocol {
     // check crypto protocol version
     OzoneKMSUtil.checkCryptoProtocolVersion(feInfo);
     KeyProvider.KeyVersion decrypted;
-    // TODO: support get kms uri from om rpc server.
     decrypted = OzoneKMSUtil.decryptEncryptedDataEncryptionKey(feInfo,
-        OzoneKMSUtil.getKeyProvider(conf, OzoneKMSUtil.getKeyProviderUri(
-            ugi, null, null, conf)));
+        getKeyProvider());
     return decrypted;
   }
 
@@ -659,27 +652,14 @@ public class RpcClient implements ClientProtocol {
       throws IOException {
     HddsClientUtils.verifyResourceName(volumeName, bucketName);
     Preconditions.checkNotNull(keyName);
-    String requestId = UUID.randomUUID().toString();
     OmKeyArgs keyArgs = new OmKeyArgs.Builder()
         .setVolumeName(volumeName)
         .setBucketName(bucketName)
         .setKeyName(keyName)
+        .setRefreshPipeline(true)
         .build();
     OmKeyInfo keyInfo = ozoneManagerClient.lookupKey(keyArgs);
-    LengthInputStream lengthInputStream =
-        KeyInputStream.getFromOmKeyInfo(
-            keyInfo, xceiverClientManager, storageContainerLocationClient,
-            requestId, verifyChecksum);
-    FileEncryptionInfo feInfo = keyInfo.getFileEncryptionInfo();
-    if (feInfo != null) {
-      final KeyProvider.KeyVersion decrypted  = getDEK(feInfo);
-      final CryptoInputStream cryptoIn =
-          new CryptoInputStream(lengthInputStream.getWrappedStream(),
-              OzoneKMSUtil.getCryptoCodec(conf, feInfo),
-              decrypted.getMaterial(), feInfo.getIV());
-      return new OzoneInputStream(cryptoIn);
-    }
-    return new OzoneInputStream(lengthInputStream.getWrappedStream());
+    return createInputStream(keyInfo);
   }
 
   @Override
@@ -739,6 +719,7 @@ public class RpcClient implements ClientProtocol {
         .setVolumeName(volumeName)
         .setBucketName(bucketName)
         .setKeyName(keyName)
+        .setRefreshPipeline(true)
         .build();
     OmKeyInfo keyInfo = ozoneManagerClient.lookupKey(keyArgs);
 
@@ -838,6 +819,7 @@ public class RpcClient implements ClientProtocol {
         .setKeyName(keyName)
         .setType(HddsProtos.ReplicationType.valueOf(type.toString()))
         .setFactor(HddsProtos.ReplicationFactor.valueOf(factor.getValue()))
+        .setAcls(getAclList())
         .build();
     OmMultipartInfo multipartInfo = ozoneManagerClient
         .initiateMultipartUpload(keyArgs);
@@ -867,6 +849,7 @@ public class RpcClient implements ClientProtocol {
         .setIsMultipartKey(true)
         .setMultipartUploadID(uploadID)
         .setMultipartUploadPartNumber(partNumber)
+        .setAcls(getAclList())
         .build();
 
     OpenKeySession openKey = ozoneManagerClient.openKey(keyArgs);
@@ -889,6 +872,7 @@ public class RpcClient implements ClientProtocol {
             .setMultipartUploadID(uploadID)
             .setIsMultipartKey(true)
             .setMaxRetryCount(maxRetryCount)
+            .setRetryInterval(retryInterval)
             .build();
     keyOutputStream.addPreallocateBlocks(
         openKey.getKeyInfo().getLatestVersionLocations(),
@@ -908,6 +892,7 @@ public class RpcClient implements ClientProtocol {
         .setBucketName(bucketName)
         .setKeyName(keyName)
         .setMultipartUploadID(uploadID)
+        .setAcls(getAclList())
         .build();
 
     OmMultipartUploadList omMultipartUploadList = new OmMultipartUploadList(
@@ -966,4 +951,190 @@ public class RpcClient implements ClientProtocol {
 
   }
 
+  @Override
+  public OzoneFileStatus getOzoneFileStatus(String volumeName,
+      String bucketName, String keyName) throws IOException {
+    OmKeyArgs keyArgs = new OmKeyArgs.Builder()
+        .setVolumeName(volumeName)
+        .setBucketName(bucketName)
+        .setKeyName(keyName)
+        .build();
+    return ozoneManagerClient.getFileStatus(keyArgs);
+  }
+
+  @Override
+  public void createDirectory(String volumeName, String bucketName,
+      String keyName) throws IOException {
+    OmKeyArgs keyArgs = new OmKeyArgs.Builder().setVolumeName(volumeName)
+        .setBucketName(bucketName)
+        .setKeyName(keyName)
+        .setAcls(getAclList())
+        .build();
+    ozoneManagerClient.createDirectory(keyArgs);
+  }
+
+  @Override
+  public OzoneInputStream readFile(String volumeName, String bucketName,
+      String keyName) throws IOException {
+    OmKeyArgs keyArgs = new OmKeyArgs.Builder()
+        .setVolumeName(volumeName)
+        .setBucketName(bucketName)
+        .setKeyName(keyName)
+        .build();
+    OmKeyInfo keyInfo = ozoneManagerClient.lookupFile(keyArgs);
+    return createInputStream(keyInfo);
+  }
+
+  @Override
+  public OzoneOutputStream createFile(String volumeName, String bucketName,
+      String keyName, long size, ReplicationType type, ReplicationFactor factor,
+      boolean overWrite, boolean recursive) throws IOException {
+    OmKeyArgs keyArgs = new OmKeyArgs.Builder()
+        .setVolumeName(volumeName)
+        .setBucketName(bucketName)
+        .setKeyName(keyName)
+        .setDataSize(size)
+        .setType(HddsProtos.ReplicationType.valueOf(type.name()))
+        .setFactor(HddsProtos.ReplicationFactor.valueOf(factor.getValue()))
+        .setAcls(getAclList())
+        .build();
+    OpenKeySession keySession =
+        ozoneManagerClient.createFile(keyArgs, overWrite, recursive);
+    return createOutputStream(keySession, UUID.randomUUID().toString(), type,
+        factor);
+  }
+
+  @Override
+  public List<OzoneFileStatus> listStatus(String volumeName, String bucketName,
+      String keyName, boolean recursive, String startKey, long numEntries)
+      throws IOException {
+    OmKeyArgs keyArgs = new OmKeyArgs.Builder()
+        .setVolumeName(volumeName)
+        .setBucketName(bucketName)
+        .setKeyName(keyName)
+        .build();
+    return ozoneManagerClient
+        .listStatus(keyArgs, recursive, startKey, numEntries);
+  }
+
+  /**
+   * Add acl for Ozone object. Return true if acl is added successfully else
+   * false.
+   *
+   * @param obj Ozone object for which acl should be added.
+   * @param acl ozone acl top be added.
+   * @throws IOException if there is error.
+   */
+  @Override
+  public boolean addAcl(OzoneObj obj, OzoneAcl acl) throws IOException {
+    return ozoneManagerClient.addAcl(obj, acl);
+  }
+
+  /**
+   * Remove acl for Ozone object. Return true if acl is removed successfully
+   * else false.
+   *
+   * @param obj Ozone object.
+   * @param acl Ozone acl to be removed.
+   * @throws IOException if there is error.
+   */
+  @Override
+  public boolean removeAcl(OzoneObj obj, OzoneAcl acl) throws IOException {
+    return ozoneManagerClient.removeAcl(obj, acl);
+  }
+
+  /**
+   * Acls to be set for given Ozone object. This operations reset ACL for given
+   * object to list of ACLs provided in argument.
+   *
+   * @param obj Ozone object.
+   * @param acls List of acls.
+   * @throws IOException if there is error.
+   */
+  @Override
+  public boolean setAcl(OzoneObj obj, List<OzoneAcl> acls) throws IOException {
+    return ozoneManagerClient.setAcl(obj, acls);
+  }
+
+  /**
+   * Returns list of ACLs for given Ozone object.
+   *
+   * @param obj Ozone object.
+   * @throws IOException if there is error.
+   */
+  @Override
+  public List<OzoneAcl> getAcl(OzoneObj obj) throws IOException {
+    return ozoneManagerClient.getAcl(obj);
+  }
+
+  private OzoneInputStream createInputStream(OmKeyInfo keyInfo)
+      throws IOException {
+    LengthInputStream lengthInputStream = KeyInputStream
+        .getFromOmKeyInfo(keyInfo, xceiverClientManager,
+            verifyChecksum);
+    FileEncryptionInfo feInfo = keyInfo.getFileEncryptionInfo();
+    if (feInfo != null) {
+      final KeyProvider.KeyVersion decrypted = getDEK(feInfo);
+      final CryptoInputStream cryptoIn =
+          new CryptoInputStream(lengthInputStream.getWrappedStream(),
+              OzoneKMSUtil.getCryptoCodec(conf, feInfo),
+              decrypted.getMaterial(), feInfo.getIV());
+      return new OzoneInputStream(cryptoIn);
+    }
+    return new OzoneInputStream(lengthInputStream.getWrappedStream());
+  }
+
+  private OzoneOutputStream createOutputStream(OpenKeySession openKey,
+      String requestId, ReplicationType type, ReplicationFactor factor)
+      throws IOException {
+    KeyOutputStream keyOutputStream =
+        new KeyOutputStream.Builder()
+            .setHandler(openKey)
+            .setXceiverClientManager(xceiverClientManager)
+            .setOmClient(ozoneManagerClient)
+            .setChunkSize(chunkSize)
+            .setRequestID(requestId)
+            .setType(HddsProtos.ReplicationType.valueOf(type.toString()))
+            .setFactor(HddsProtos.ReplicationFactor.valueOf(factor.getValue()))
+            .setStreamBufferFlushSize(streamBufferFlushSize)
+            .setStreamBufferMaxSize(streamBufferMaxSize)
+            .setWatchTimeout(watchTimeout)
+            .setBlockSize(blockSize)
+            .setChecksumType(checksumType)
+            .setBytesPerChecksum(bytesPerChecksum)
+            .setMaxRetryCount(maxRetryCount)
+            .setRetryInterval(retryInterval)
+            .build();
+    keyOutputStream
+        .addPreallocateBlocks(openKey.getKeyInfo().getLatestVersionLocations(),
+            openKey.getOpenVersion());
+    final FileEncryptionInfo feInfo = keyOutputStream.getFileEncryptionInfo();
+    if (feInfo != null) {
+      KeyProvider.KeyVersion decrypted = getDEK(feInfo);
+      final CryptoOutputStream cryptoOut =
+          new CryptoOutputStream(keyOutputStream,
+              OzoneKMSUtil.getCryptoCodec(conf, feInfo),
+              decrypted.getMaterial(), feInfo.getIV());
+      return new OzoneOutputStream(cryptoOut);
+    } else {
+      return new OzoneOutputStream(keyOutputStream);
+    }
+  }
+
+  @Override
+  public KeyProvider getKeyProvider() throws IOException {
+    return OzoneKMSUtil.getKeyProvider(conf, getKeyProviderUri());
+  }
+
+  @Override
+  public URI getKeyProviderUri() throws IOException {
+    // TODO: fix me to support kms instances for difference OMs
+    return OzoneKMSUtil.getKeyProviderUri(ugi,
+        null, null, conf);
+  }
+
+  @Override
+  public String getCanonicalServiceName() {
+    return (dtService != null) ? dtService.toString() : null;
+  }
 }

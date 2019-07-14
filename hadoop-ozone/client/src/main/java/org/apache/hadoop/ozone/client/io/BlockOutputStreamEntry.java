@@ -20,6 +20,7 @@ package org.apache.hadoop.ozone.client.io;
 import java.io.IOException;
 import java.io.OutputStream;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.hdds.client.BlockID;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
@@ -46,7 +47,6 @@ public final class BlockOutputStreamEntry extends OutputStream {
   private final Pipeline pipeline;
   private final ChecksumType checksumType;
   private final int bytesPerChecksum;
-  private final String requestId;
   private final int chunkSize;
   // total number of bytes that should be written to this stream
   private final long length;
@@ -72,7 +72,6 @@ public final class BlockOutputStreamEntry extends OutputStream {
     this.key = key;
     this.xceiverClientManager = xceiverClientManager;
     this.pipeline = pipeline;
-    this.requestId = requestId;
     this.chunkSize = chunkSize;
     this.token = token;
     this.length = length;
@@ -110,7 +109,7 @@ public final class BlockOutputStreamEntry extends OutputStream {
       }
       this.outputStream =
           new BlockOutputStream(blockID, key, xceiverClientManager,
-              pipeline, requestId, chunkSize, streamBufferFlushSize,
+              pipeline, chunkSize, streamBufferFlushSize,
               streamBufferMaxSize, watchTimeout, bufferPool, checksumType,
               bytesPerChecksum);
     }
@@ -148,11 +147,18 @@ public final class BlockOutputStreamEntry extends OutputStream {
     }
   }
 
-  long getTotalSuccessfulFlushedData() throws IOException {
+  boolean isClosed() {
+    if (outputStream != null) {
+      return  ((BlockOutputStream) outputStream).isClosed();
+    }
+    return false;
+  }
+
+  long getTotalAckDataLength() {
     if (outputStream != null) {
       BlockOutputStream out = (BlockOutputStream) this.outputStream;
       blockID = out.getBlockID();
-      return out.getTotalSuccessfulFlushedData();
+      return out.getTotalAckDataLength();
     } else {
       // For a pre allocated block for which no write has been initiated,
       // the OutputStream will be null here.
@@ -295,6 +301,7 @@ public final class BlockOutputStreamEntry extends OutputStream {
     }
   }
 
+  @VisibleForTesting
   public OutputStream getOutputStream() {
     return outputStream;
   }
@@ -313,10 +320,6 @@ public final class BlockOutputStreamEntry extends OutputStream {
 
   public Pipeline getPipeline() {
     return pipeline;
-  }
-
-  public String getRequestId() {
-    return requestId;
   }
 
   public int getChunkSize() {

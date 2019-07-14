@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.yarn.service;
 
+import com.fasterxml.jackson.databind.PropertyNamingStrategy;
 import com.google.common.base.Throwables;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.Multimap;
@@ -50,7 +51,6 @@ import org.apache.hadoop.yarn.service.utils.ServiceApiUtil;
 import org.apache.hadoop.yarn.service.utils.SliderFileSystem;
 import org.apache.hadoop.yarn.util.LinuxResourceCalculatorPlugin;
 import org.apache.hadoop.yarn.util.ProcfsBasedProcessTree;
-import org.codehaus.jackson.map.PropertyNamingStrategy;
 import org.junit.rules.TestWatcher;
 import org.junit.runner.Description;
 import org.slf4j.Logger;
@@ -98,7 +98,7 @@ public class ServiceTestUtils {
 
   public static final JsonSerDeser<Service> JSON_SER_DESER =
       new JsonSerDeser<>(Service.class,
-          PropertyNamingStrategy.CAMEL_CASE_TO_LOWER_CASE_WITH_UNDERSCORES);
+          PropertyNamingStrategy.SNAKE_CASE);
 
   // Example service definition
   // 2 components, each of which has 2 containers.
@@ -216,6 +216,8 @@ public class ServiceTestUtils {
     LOG.info("Starting up YARN cluster");
     if (conf == null) {
       setConf(new YarnConfiguration());
+      conf.setBoolean(YarnConfiguration.YARN_MINICLUSTER_FIXED_PORTS, false);
+      conf.setBoolean(YarnConfiguration.YARN_MINICLUSTER_USE_RPC, false);
     }
     conf.setInt(YarnConfiguration.RM_SCHEDULER_MINIMUM_ALLOCATION_MB, 128);
     // reduce the teardown waiting time
@@ -408,7 +410,8 @@ public class ServiceTestUtils {
         fs = new SliderFileSystem(conf);
         fs.setAppDir(new Path(serviceBasePath.toString()));
       } catch (IOException e) {
-        Throwables.propagate(e);
+        Throwables.throwIfUnchecked(e);
+        throw new RuntimeException(e);
       }
     }
 
@@ -533,6 +536,12 @@ public class ServiceTestUtils {
   protected void waitForServiceToBeStarted(ServiceClient client,
       Service exampleApp) throws TimeoutException, InterruptedException {
     waitForServiceToBeInState(client, exampleApp, ServiceState.STARTED);
+  }
+
+  protected void waitForServiceToBeExpressUpgrading(ServiceClient client,
+      Service exampleApp) throws TimeoutException, InterruptedException {
+    waitForServiceToBeInState(client, exampleApp,
+        ServiceState.EXPRESS_UPGRADING);
   }
 
   protected void waitForServiceToBeInState(ServiceClient client,

@@ -40,6 +40,7 @@ import java.net.URI;
 import java.security.NoSuchAlgorithmException;
 import java.security.PrivilegedExceptionAction;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashSet;
@@ -50,6 +51,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.hadoop.conf.Configuration;
@@ -80,6 +82,7 @@ import org.apache.hadoop.fs.contract.ContractTestUtils;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.DistributedFileSystem.HdfsDataOutputStreamBuilder;
 import org.apache.hadoop.hdfs.client.HdfsClientConfigKeys;
+import org.apache.hadoop.hdfs.client.HdfsDataOutputStream;
 import org.apache.hadoop.hdfs.client.impl.LeaseRenewer;
 import org.apache.hadoop.hdfs.DFSOpsCountStatistics.OpType;
 import org.apache.hadoop.hdfs.net.Peer;
@@ -97,6 +100,7 @@ import org.apache.hadoop.hdfs.server.datanode.fsdataset.FsVolumeSpi;
 import org.apache.hadoop.hdfs.server.namenode.ErasureCodingPolicyManager;
 import org.apache.hadoop.hdfs.web.WebHdfsConstants;
 import org.apache.hadoop.io.erasurecode.ECSchema;
+import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.net.DNSToSwitchMapping;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.ScriptBasedMapping;
@@ -104,6 +108,7 @@ import org.apache.hadoop.net.StaticMapping;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.test.GenericTestUtils;
+import org.apache.hadoop.test.LambdaTestUtils;
 import org.apache.hadoop.test.Whitebox;
 import org.apache.hadoop.util.DataChecksum;
 import org.apache.hadoop.util.Time;
@@ -1805,6 +1810,59 @@ public class TestDistributedFileSystem {
   }
 
   @Test
+  public void testSuperUserPrivilege() throws Exception {
+    HdfsConfiguration conf = new HdfsConfiguration();
+    File tmpDir = GenericTestUtils.getTestDir(UUID.randomUUID().toString());
+    final Path jksPath = new Path(tmpDir.toString(), "test.jks");
+    conf.set(CommonConfigurationKeysPublic.HADOOP_SECURITY_KEY_PROVIDER_PATH,
+        JavaKeyStoreProvider.SCHEME_NAME + "://file" + jksPath.toUri());
+
+    try (MiniDFSCluster cluster = new MiniDFSCluster.Builder(conf).build()) {
+      cluster.waitActive();
+      final DistributedFileSystem dfs = cluster.getFileSystem();
+      Path dir = new Path("/testPrivilege");
+      dfs.mkdirs(dir);
+
+      final KeyProvider provider =
+          cluster.getNameNode().getNamesystem().getProvider();
+      final KeyProvider.Options options = KeyProvider.options(conf);
+      provider.createKey("key", options);
+      provider.flush();
+
+      // Create a non-super user.
+      UserGroupInformation user = UserGroupInformation.createUserForTesting(
+          "Non_SuperUser", new String[] {"Non_SuperGroup"});
+
+      DistributedFileSystem userfs = (DistributedFileSystem) user.doAs(
+          (PrivilegedExceptionAction<FileSystem>) () -> FileSystem.get(conf));
+
+      LambdaTestUtils.intercept(AccessControlException.class,
+          "Superuser privilege is required",
+          () -> userfs.createEncryptionZone(dir, "key"));
+
+      RemoteException re = LambdaTestUtils.intercept(RemoteException.class,
+          "Superuser privilege is required",
+          () -> userfs.listEncryptionZones().hasNext());
+      assertTrue(re.unwrapRemoteException() instanceof AccessControlException);
+
+      re = LambdaTestUtils.intercept(RemoteException.class,
+          "Superuser privilege is required",
+          () -> userfs.listReencryptionStatus().hasNext());
+      assertTrue(re.unwrapRemoteException() instanceof AccessControlException);
+
+      LambdaTestUtils.intercept(AccessControlException.class,
+          "Superuser privilege is required",
+          () -> user.doAs(new PrivilegedExceptionAction<Void>() {
+            @Override
+            public Void run() throws Exception {
+              cluster.getNameNode().getRpcServer().rollEditLog();
+              return null;
+            }
+          }));
+    }
+  }
+
+  @Test
   public void testRemoveErasureCodingPolicy() throws Exception {
     Configuration conf = getTestConfiguration();
     MiniDFSCluster cluster = null;
@@ -1922,6 +1980,32 @@ public class TestDistributedFileSystem {
       if (cluster != null) {
         cluster.shutdown();
       }
+    }
+  }
+
+  @Test
+  public void testStorageFavouredNodes()
+      throws IOException, InterruptedException, TimeoutException {
+    Configuration conf = new HdfsConfiguration();
+    try (MiniDFSCluster cluster = new MiniDFSCluster.Builder(conf)
+        .storageTypes(new StorageType[] {StorageType.SSD, StorageType.DISK})
+        .numDataNodes(3).storagesPerDatanode(2).build()) {
+      DistributedFileSystem fs = cluster.getFileSystem();
+      Path file1 = new Path("/tmp/file1");
+      fs.mkdirs(new Path("/tmp"));
+      fs.setStoragePolicy(new Path("/tmp"), "ONE_SSD");
+      InetSocketAddress[] addrs =
+          {cluster.getDataNodes().get(0).getXferAddress()};
+      HdfsDataOutputStream stream = fs.create(file1, FsPermission.getDefault(),
+          false, 1024, (short) 3, 1024, null, addrs);
+      stream.write("Some Bytes".getBytes());
+      stream.close();
+      DFSTestUtil.waitReplication(fs, file1, (short) 3);
+      BlockLocation[] locations = fs.getClient()
+          .getBlockLocations(file1.toUri().getPath(), 0, Long.MAX_VALUE);
+      int numSSD = Collections.frequency(
+          Arrays.asList(locations[0].getStorageTypes()), StorageType.SSD);
+      assertEquals("Number of SSD should be 1 but was : " + numSSD, 1, numSSD);
     }
   }
 }

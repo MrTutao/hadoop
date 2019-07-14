@@ -34,6 +34,7 @@ import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.ResourceHandlerException;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.fpga.FpgaResourceAllocator;
+import org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.fpga.FpgaResourceAllocator.FpgaDevice;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.resourceplugin.fpga.discovery.AoclOutputBasedDiscoveryStrategy;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.resourceplugin.fpga.discovery.FPGADiscoveryStrategy;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.resourceplugin.fpga.discovery.ScriptBasedFPGADiscoveryStrategy;
@@ -49,12 +50,8 @@ public class FpgaDiscoverer {
   private static final Logger LOG = LoggerFactory.getLogger(
       FpgaDiscoverer.class);
 
-  private static FpgaDiscoverer instance;
-
   private Configuration conf = null;
-
   private AbstractFpgaVendorPlugin plugin = null;
-
   private List<FpgaResourceAllocator.FpgaDevice> currentFpgaInfo = null;
 
   private Function<String, Optional<String>> scriptRunner = this::runScript;
@@ -62,28 +59,9 @@ public class FpgaDiscoverer {
   // shell command timeout
   public static final int MAX_EXEC_TIMEOUT_MS = 10 * 1000;
 
-  static {
-    instance = new FpgaDiscoverer();
-  }
-
-  public static FpgaDiscoverer getInstance() {
-    return instance;
-  }
-
   @VisibleForTesting
   void setScriptRunner(Function<String, Optional<String>> scriptRunner) {
     this.scriptRunner = scriptRunner;
-  }
-
-  @VisibleForTesting
-  static void reset() {
-    instance = new FpgaDiscoverer();
-  }
-
-  @VisibleForTesting
-  public static FpgaDiscoverer setInstance(FpgaDiscoverer newInstance) {
-    instance = newInstance;
-    return instance;
   }
 
   @VisibleForTesting
@@ -91,7 +69,7 @@ public class FpgaDiscoverer {
     this.conf = configuration;
   }
 
-  public List<FpgaResourceAllocator.FpgaDevice> getCurrentFpgaInfo() {
+  public List<FpgaDevice> getCurrentFpgaInfo() {
     return currentFpgaInfo;
   }
 
@@ -114,11 +92,14 @@ public class FpgaDiscoverer {
   }
 
   /**
-   * get avialable devices minor numbers from toolchain or static configuration
-   * */
-  public List<FpgaResourceAllocator.FpgaDevice> discover()
+   * Get available devices minor numbers from toolchain or static configuration.
+   *
+   * @return the list of FPGA devices
+   * @throws ResourceHandlerException if there's any error during discovery
+   **/
+  public List<FpgaDevice> discover()
       throws ResourceHandlerException {
-    List<FpgaResourceAllocator.FpgaDevice> list;
+    List<FpgaDevice> list;
     String allowed = this.conf.get(YarnConfiguration.NM_FPGA_ALLOWED_DEVICES);
 
     String availableDevices = conf.get(
@@ -143,6 +124,7 @@ public class FpgaDiscoverer {
 
     if (allowed == null || allowed.equalsIgnoreCase(
         YarnConfiguration.AUTOMATICALLY_DISCOVER_GPU_DEVICES)) {
+      currentFpgaInfo = ImmutableList.copyOf(list);
       return list;
     } else if (allowed.matches("(\\d,)*\\d")){
       Set<String> minors = Sets.newHashSet(allowed.split(","));
@@ -150,8 +132,10 @@ public class FpgaDiscoverer {
       // Replace list with a filtered one
       list = list
         .stream()
-        .filter(dev -> minors.contains(dev.getMinor().toString()))
+        .filter(dev -> minors.contains(String.valueOf(dev.getMinor())))
         .collect(Collectors.toList());
+
+      currentFpgaInfo = ImmutableList.copyOf(list);
 
       // if the count of user configured is still larger than actual
       if (list.size() != minors.size()) {
@@ -163,8 +147,6 @@ public class FpgaDiscoverer {
       throw new ResourceHandlerException("Invalid value configured for " +
           YarnConfiguration.NM_FPGA_ALLOWED_DEVICES + ":\"" + allowed + "\"");
     }
-
-    currentFpgaInfo = ImmutableList.copyOf(list);
 
     return list;
   }

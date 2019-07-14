@@ -55,15 +55,16 @@ import org.slf4j.LoggerFactory;
 public class RDBStore implements DBStore {
   private static final Logger LOG =
       LoggerFactory.getLogger(RDBStore.class);
-  private final RocksDB db;
-  private final File dbLocation;
+  private RocksDB db;
+  private File dbLocation;
   private final WriteOptions writeOptions;
   private final DBOptions dbOptions;
   private final CodecRegistry codecRegistry;
   private final Hashtable<String, ColumnFamilyHandle> handleTable;
   private ObjectName statMBeanName;
   private RDBCheckpointManager checkPointManager;
-  private final String checkpointsParentDir;
+  private String checkpointsParentDir;
+  private List<ColumnFamilyHandle> columnFamilyHandles;
 
   @VisibleForTesting
   public RDBStore(File dbFile, DBOptions options,
@@ -81,7 +82,7 @@ public class RDBStore implements DBStore {
     codecRegistry = registry;
     final List<ColumnFamilyDescriptor> columnFamilyDescriptors =
         new ArrayList<>();
-    final List<ColumnFamilyHandle> columnFamilyHandles = new ArrayList<>();
+    columnFamilyHandles = new ArrayList<>();
 
     for (TableConfig family : families) {
       columnFamilyDescriptors.add(family.getDescriptor());
@@ -107,7 +108,8 @@ public class RDBStore implements DBStore {
         jmxProperties.put("dbName", dbFile.getName());
         statMBeanName = HddsUtils.registerWithJmxProperties(
             "Ozone", "RocksDbStore", jmxProperties,
-            new RocksDBStoreMBean(dbOptions.statistics()));
+            RocksDBStoreMBean.create(dbOptions.statistics(),
+                dbFile.getName()));
         if (statMBeanName == null) {
           LOG.warn("jmx registration failed during RocksDB init, db path :{}",
               dbFile.getAbsolutePath());
@@ -268,6 +270,17 @@ public class RDBStore implements DBStore {
   }
 
   @Override
+  public void flush() throws IOException {
+    final FlushOptions flushOptions = new FlushOptions().setWaitForFlush(true);
+    try {
+      db.flush(flushOptions);
+    } catch (RocksDBException e) {
+      LOG.error("Unable to Flush RocksDB data", e);
+      throw toIOException("Unable to Flush RocksDB data", e);
+    }
+  }
+
+  @Override
   public DBCheckpoint getCheckpoint(boolean flush) {
     final FlushOptions flushOptions = new FlushOptions().setWaitForFlush(flush);
     try {
@@ -276,6 +289,38 @@ public class RDBStore implements DBStore {
       LOG.error("Unable to Flush RocksDB data before creating snapshot", e);
     }
     return checkPointManager.createCheckpoint(checkpointsParentDir);
+  }
+
+  @Override
+  public File getDbLocation() {
+    return dbLocation;
+  }
+
+  @Override
+  public Map<Integer, String> getTableNames() {
+    Map<Integer, String> tableNames = new HashMap<>();
+    StringCodec stringCodec = new StringCodec();
+
+    for (ColumnFamilyHandle columnFamilyHandle : columnFamilyHandles) {
+      try {
+        tableNames.put(columnFamilyHandle.getID(), stringCodec
+            .fromPersistedFormat(columnFamilyHandle.getName()));
+      } catch (RocksDBException | IOException e) {
+        LOG.error("Unexpected exception while reading column family handle " +
+            "name", e);
+      }
+    }
+    return tableNames;
+  }
+
+  @Override
+  public CodecRegistry getCodecRegistry() {
+    return codecRegistry;
+  }
+
+  @VisibleForTesting
+  public RocksDB getDb() {
+    return db;
   }
 
 }

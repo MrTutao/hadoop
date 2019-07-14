@@ -19,8 +19,10 @@
 
 package org.apache.hadoop.utils.db;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Map;
 
 import org.apache.hadoop.classification.InterfaceStability;
 
@@ -43,6 +45,7 @@ public interface DBStore extends AutoCloseable {
    */
   Table<byte[], byte[]> getTable(String name) throws IOException;
 
+
   /**
    * Gets an existing TableStore with implicit key/value conversion.
    *
@@ -63,6 +66,12 @@ public interface DBStore extends AutoCloseable {
    * @throws IOException on Failure
    */
   ArrayList<Table> listTables() throws IOException;
+
+  /**
+   * Flush the DB buffer onto persistent storage.
+   * @throws IOException
+   */
+  void flush() throws IOException;
 
   /**
    * Compact the entire database.
@@ -145,4 +154,22 @@ public interface DBStore extends AutoCloseable {
    */
   DBCheckpoint getCheckpoint(boolean flush) throws IOException;
 
+  /**
+   * Get DB Store location.
+   * @return DB file location.
+   */
+  File getDbLocation();
+
+  /**
+   * Get List of Index to Table Names.
+   * (For decoding table from column family index)
+   * @return Map of Index -> TableName
+   */
+  Map<Integer, String> getTableNames();
+
+  /**
+   * Get Codec registry.
+   * @return codec registry.
+   */
+  CodecRegistry getCodecRegistry();
 }

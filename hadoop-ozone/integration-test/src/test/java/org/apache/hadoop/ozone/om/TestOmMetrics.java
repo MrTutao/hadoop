@@ -87,11 +87,11 @@ public class TestOmMetrics {
             ozoneManager, "volumeManager");
     VolumeManager mockVm = Mockito.spy(volumeManager);
 
-    Mockito.doNothing().when(mockVm).createVolume(null);
-    Mockito.doNothing().when(mockVm).deleteVolume(null);
+    Mockito.doReturn(null).when(mockVm).createVolume(null);
+    Mockito.doReturn(null).when(mockVm).deleteVolume(null);
     Mockito.doReturn(null).when(mockVm).getVolumeInfo(null);
     Mockito.doReturn(true).when(mockVm).checkVolumeAccess(null, null);
-    Mockito.doNothing().when(mockVm).setOwner(null, null);
+    Mockito.doReturn(null).when(mockVm).setOwner(null, null);
     Mockito.doReturn(null).when(mockVm).listVolumes(null, null, null, 0);
 
     HddsWhiteboxTestUtils.setInternalState(
@@ -258,7 +258,7 @@ public class TestOmMetrics {
 
     Mockito.doReturn(null).when(mockKm).openKey(null);
     Mockito.doNothing().when(mockKm).deleteKey(null);
-    Mockito.doReturn(null).when(mockKm).lookupKey(null);
+    Mockito.doReturn(null).when(mockKm).lookupKey(null, "");
     Mockito.doReturn(null).when(mockKm).listKeys(null, null, null, null, 0);
     Mockito.doNothing().when(mockKm).commitKey(any(OmKeyArgs.class), anyLong());
     Mockito.doReturn(null).when(mockKm).initiateMultipartUpload(
@@ -293,7 +293,7 @@ public class TestOmMetrics {
     // inject exception to test for Failure Metrics
     Mockito.doThrow(exception).when(mockKm).openKey(null);
     Mockito.doThrow(exception).when(mockKm).deleteKey(null);
-    Mockito.doThrow(exception).when(mockKm).lookupKey(null);
+    Mockito.doThrow(exception).when(mockKm).lookupKey(null, "");
     Mockito.doThrow(exception).when(mockKm).listKeys(
         null, null, null, null, 0);
     Mockito.doThrow(exception).when(mockKm).commitKey(any(OmKeyArgs.class),

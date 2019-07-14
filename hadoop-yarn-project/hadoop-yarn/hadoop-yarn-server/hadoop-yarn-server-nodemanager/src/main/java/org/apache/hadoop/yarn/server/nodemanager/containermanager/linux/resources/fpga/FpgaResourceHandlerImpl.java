@@ -19,9 +19,15 @@
 
 package org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.fpga;
 
-import com.google.common.annotations.VisibleForTesting;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import static org.apache.hadoop.yarn.api.records.ResourceInformation.FPGA_URI;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.conf.Configuration;
@@ -39,19 +45,16 @@ import org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resource
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.fpga.FpgaResourceAllocator.FpgaDevice;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.resourceplugin.fpga.AbstractFpgaVendorPlugin;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.resourceplugin.fpga.FpgaDiscoverer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-
-import static org.apache.hadoop.yarn.api.records.ResourceInformation.FPGA_URI;
+import com.google.common.annotations.VisibleForTesting;
 
 @InterfaceStability.Unstable
 @InterfaceAudience.Private
 public class FpgaResourceHandlerImpl implements ResourceHandler {
-
-  static final Logger LOG = LoggerFactory.
-      getLogger(FpgaResourceHandlerImpl.class);
+  private static final Logger LOG =
+      LoggerFactory.getLogger(FpgaResourceHandlerImpl.class);
 
   private final String REQUEST_FPGA_IP_ID_KEY = "REQUESTED_FPGA_IP_ID";
 
@@ -61,6 +64,8 @@ public class FpgaResourceHandlerImpl implements ResourceHandler {
 
   private final CGroupsHandler cGroupsHandler;
 
+  private final FpgaDiscoverer fpgaDiscoverer;
+
   public static final String EXCLUDED_FPGAS_CLI_OPTION = "--excluded_fpgas";
   public static final String CONTAINER_ID_CLI_OPTION = "--container_id";
   private PrivilegedOperationExecutor privilegedOperationExecutor;
@@ -69,23 +74,23 @@ public class FpgaResourceHandlerImpl implements ResourceHandler {
   public FpgaResourceHandlerImpl(Context nmContext,
       CGroupsHandler cGroupsHandler,
       PrivilegedOperationExecutor privilegedOperationExecutor,
-      AbstractFpgaVendorPlugin plugin) {
+      AbstractFpgaVendorPlugin plugin,
+      FpgaDiscoverer fpgaDiscoverer) {
     this.allocator = new FpgaResourceAllocator(nmContext);
     this.vendorPlugin = plugin;
-    FpgaDiscoverer.getInstance().setResourceHanderPlugin(vendorPlugin);
+    this.fpgaDiscoverer = fpgaDiscoverer;
     this.cGroupsHandler = cGroupsHandler;
     this.privilegedOperationExecutor = privilegedOperationExecutor;
   }
 
   @VisibleForTesting
-  public FpgaResourceAllocator getFpgaAllocator() {
+  FpgaResourceAllocator getFpgaAllocator() {
     return allocator;
   }
 
   public String getRequestedIPID(Container container) {
-    String r= container.getLaunchContext().getEnvironment().
+    return container.getLaunchContext().getEnvironment().
         get(REQUEST_FPGA_IP_ID_KEY);
-    return r == null ? "" : r;
   }
 
   @Override
@@ -97,9 +102,8 @@ public class FpgaResourceHandlerImpl implements ResourceHandler {
     }
     LOG.info("FPGA Plugin bootstrap success.");
     // Get avialable devices minor numbers from toolchain or static configuration
-    List<FpgaResourceAllocator.FpgaDevice> fpgaDeviceList =
-        FpgaDiscoverer.getInstance().discover();
-    allocator.addFpga(vendorPlugin.getFpgaType(), fpgaDeviceList);
+    List<FpgaDevice> fpgaDeviceList = fpgaDiscoverer.discover();
+    allocator.addFpgaDevices(vendorPlugin.getFpgaType(), fpgaDeviceList);
     this.cGroupsHandler.initializeCGroupController(
         CGroupsHandler.CGroupController.DEVICES);
     return null;
@@ -125,9 +129,22 @@ public class FpgaResourceHandlerImpl implements ResourceHandler {
     try {
 
       // allocate even request 0 FPGA because we need to deny all device numbers for this container
+      final String requestedIPID = getRequestedIPID(container);
+      String localizedIPIDHash = null;
+      ipFilePath = vendorPlugin.retrieveIPfilePath(
+          requestedIPID, container.getWorkDir(),
+          container.getResourceSet().getLocalizedResources());
+      if (ipFilePath != null) {
+        try (FileInputStream fis = new FileInputStream(ipFilePath)) {
+          localizedIPIDHash = DigestUtils.sha256Hex(fis);
+        } catch (IOException e) {
+          throw new ResourceHandlerException("Could not calculate SHA-256", e);
+        }
+      }
+
       FpgaResourceAllocator.FpgaAllocation allocation = allocator.assignFpga(
           vendorPlugin.getFpgaType(), deviceCount,
-          container, getRequestedIPID(container));
+          container, localizedIPIDHash);
       LOG.info("FpgaAllocation:" + allocation);
 
       PrivilegedOperation privilegedOperation =
@@ -168,23 +185,23 @@ public class FpgaResourceHandlerImpl implements ResourceHandler {
               " if you want YARN to program the device");
         } else {
           LOG.info("IP file path:" + ipFilePath);
-          List<FpgaResourceAllocator.FpgaDevice> allowed = allocation.getAllowed();
+          List<FpgaDevice> allowed = allocation.getAllowed();
           String majorMinorNumber;
           for (int i = 0; i < allowed.size(); i++) {
             FpgaDevice device = allowed.get(i);
             majorMinorNumber = device.getMajor() + ":" + device.getMinor();
-            String currentIPID = device.getIPID();
-            if (null != currentIPID &&
-                currentIPID.equalsIgnoreCase(getRequestedIPID(container))) {
-              LOG.info("IP already in device \"" +
-                  allowed.get(i).getAliasDevName() +
-                  "," + majorMinorNumber + "\", skip reprogramming");
+            String currentHash = allowed.get(i).getAocxHash();
+            if (currentHash != null &&
+                currentHash.equalsIgnoreCase(localizedIPIDHash)) {
+              LOG.info("IP already in device \""
+                  + allowed.get(i).getAliasDevName() + "," +
+                  majorMinorNumber + "\", skip reprogramming");
               continue;
             }
             if (vendorPlugin.configureIP(ipFilePath, device)) {
               // update the allocator that we update an IP of a device
               allocator.updateFpga(containerIdStr, allowed.get(i),
-                  getRequestedIPID(container));
+                  requestedIPID, localizedIPIDHash);
               //TODO: update the node constraint label
             }
           }

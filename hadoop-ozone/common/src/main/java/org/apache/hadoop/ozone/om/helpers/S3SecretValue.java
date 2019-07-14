@@ -17,8 +17,9 @@
  */
 package org.apache.hadoop.ozone.om.helpers;
 
-import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos;
+
+import java.util.Objects;
 
 /**
  * S3Secret to be saved in database.
@@ -26,12 +27,10 @@ import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos;
 public class S3SecretValue {
   private String kerberosID;
   private String awsSecret;
-  private String awsAccessKey;
 
   public S3SecretValue(String kerberosID, String awsSecret) {
     this.kerberosID = kerberosID;
     this.awsSecret = awsSecret;
-    this.awsAccessKey = DigestUtils.md5Hex(kerberosID);
   }
 
   public String getKerberosID() {
@@ -51,11 +50,7 @@ public class S3SecretValue {
   }
 
   public String getAwsAccessKey() {
-    return awsAccessKey;
-  }
-
-  public void setAwsAccessKey(String awsAccessKey) {
-    this.awsAccessKey = awsAccessKey;
+    return kerberosID;
   }
 
   public static S3SecretValue fromProtobuf(
@@ -72,6 +67,24 @@ public class S3SecretValue {
 
   @Override
   public String toString() {
-    return "awsAccessKey=" + awsAccessKey + "\nawsSecret=" + awsSecret;
+    return "awsAccessKey=" + kerberosID + "\nawsSecret=" + awsSecret;
+  }
+
+  @Override
+  public boolean equals(Object o) {
+    if (this == o) {
+      return true;
+    }
+    if (o == null || getClass() != o.getClass()) {
+      return false;
+    }
+    S3SecretValue that = (S3SecretValue) o;
+    return kerberosID.equals(that.kerberosID) &&
+        awsSecret.equals(that.awsSecret);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(kerberosID, awsSecret);
   }
 }

@@ -19,6 +19,9 @@ package org.apache.hadoop.hdds.scm.container;
 import org.apache.hadoop.hdds.protocol.proto
         .StorageContainerDatanodeProtocolProtos.PipelineReportsProto;
 import org.apache.hadoop.hdds.scm.TestUtils;
+import org.apache.hadoop.hdds.scm.net.NetConstants;
+import org.apache.hadoop.hdds.scm.net.NetworkTopology;
+import org.apache.hadoop.hdds.scm.net.Node;
 import org.apache.hadoop.hdds.scm.pipeline.Pipeline;
 import org.apache.hadoop.hdds.scm.pipeline.PipelineID;
 import org.apache.hadoop.hdds.scm.container.placement.metrics.SCMNodeMetric;
@@ -43,6 +46,7 @@ import org.apache.hadoop.ozone.protocol.commands.SCMCommand;
 import org.assertj.core.util.Preconditions;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedList;
@@ -78,10 +82,11 @@ public class MockNodeManager implements NodeManager {
   private final List<DatanodeDetails> deadNodes;
   private final Map<DatanodeDetails, SCMNodeStat> nodeMetricMap;
   private final SCMNodeStat aggregateStat;
-  private boolean chillmode;
+  private boolean safemode;
   private final Map<UUID, List<SCMCommand>> commandMap;
   private final Node2PipelineMap node2PipelineMap;
   private final Node2ContainerMap node2ContainerMap;
+  private NetworkTopology clusterMap;
 
   public MockNodeManager(boolean initializeFakeNodes, int nodeCount) {
     this.healthyNodes = new LinkedList<>();
@@ -98,7 +103,7 @@ public class MockNodeManager implements NodeManager {
         populateNodeMetric(dd, x);
       }
     }
-    chillmode = false;
+    safemode = false;
     this.commandMap = new HashMap<>();
   }
 
@@ -132,11 +137,11 @@ public class MockNodeManager implements NodeManager {
   }
 
   /**
-   * Sets the chill mode value.
-   * @param chillmode boolean
+   * Sets the safe mode value.
+   * @param safemode boolean
    */
-  public void setChillmode(boolean chillmode) {
-    this.chillmode = chillmode;
+  public void setSafemode(boolean safemode) {
+    this.safemode = safemode;
   }
 
   /**
@@ -184,7 +189,7 @@ public class MockNodeManager implements NodeManager {
    */
   @Override
   public List<DatanodeDetails> getAllNodes() {
-    return null;
+    return new ArrayList<>(nodeMetricMap.keySet());
   }
 
   /**
@@ -365,6 +370,9 @@ public class MockNodeManager implements NodeManager {
     try {
       node2ContainerMap.insertNewDatanode(datanodeDetails.getUuid(),
           Collections.emptySet());
+      if (clusterMap != null) {
+        clusterMap.add(datanodeDetails);
+      }
     } catch (SCMException e) {
       e.printStackTrace();
     }
@@ -448,6 +456,16 @@ public class MockNodeManager implements NodeManager {
   @Override
   public List<SCMCommand> getCommandQueue(UUID dnID) {
     return null;
+  }
+
+  @Override
+  public DatanodeDetails getNode(String address) {
+    Node node = clusterMap.getNode(NetConstants.DEFAULT_RACK + "/" + address);
+    return node == null ? null : (DatanodeDetails)node;
+  }
+
+  public void setNetworkTopology(NetworkTopology topology) {
+    this.clusterMap = topology;
   }
 
   /**

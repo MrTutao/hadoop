@@ -108,13 +108,6 @@ public class ContainerInfo implements Comparator<ContainerInfo>,
     this.replicationType = repType;
   }
 
-  public ContainerInfo(ContainerInfo info) {
-    this(info.getContainerID(), info.getState(), info.getPipelineID(),
-        info.getUsedBytes(), info.getNumberOfKeys(),
-        info.getStateEnterTime(), info.getOwner(),
-        info.getDeleteTransactionId(), info.getSequenceId(),
-        info.getReplicationFactor(), info.getReplicationType());
-  }
   /**
    * Needed for serialization findbugs.
    */
@@ -473,5 +466,13 @@ public class ContainerInfo implements Comparator<ContainerInfo>,
   public boolean isOpen() {
     return state == HddsProtos.LifeCycleState.OPEN
         || state == HddsProtos.LifeCycleState.CLOSING;
+  }
+
+  /**
+   * Check if a container is in Open state, but Close has not been initiated.
+   * @return true if Open, false otherwise.
+   */
+  public boolean isOpenNotClosing() {
+    return state == HddsProtos.LifeCycleState.OPEN;
   }
 }

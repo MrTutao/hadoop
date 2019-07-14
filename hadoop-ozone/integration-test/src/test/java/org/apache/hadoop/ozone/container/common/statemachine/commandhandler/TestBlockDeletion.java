@@ -50,7 +50,7 @@ import org.apache.hadoop.ozone.ozShell.TestOzoneShell;
 import org.apache.hadoop.ozone.protocol.commands.RetriableDatanodeEventWatcher;
 import org.apache.hadoop.test.GenericTestUtils;
 import org.apache.hadoop.test.GenericTestUtils.LogCapturer;
-import org.apache.hadoop.utils.MetadataStore;
+import org.apache.hadoop.ozone.container.common.utils.ReferenceCountedDB;
 import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -134,7 +134,7 @@ public class TestBlockDeletion {
     String keyName = UUID.randomUUID().toString();
 
     OzoneOutputStream out = bucket.createKey(keyName, value.getBytes().length,
-        ReplicationType.STAND_ALONE, ReplicationFactor.ONE, new HashMap<>());
+        ReplicationType.RATIS, ReplicationFactor.ONE, new HashMap<>());
     for (int i = 0; i < 100; i++) {
       out.write(value.getBytes());
     }
@@ -143,7 +143,9 @@ public class TestBlockDeletion {
     OmKeyArgs keyArgs = new OmKeyArgs.Builder().setVolumeName(volumeName)
         .setBucketName(bucketName).setKeyName(keyName).setDataSize(0)
         .setType(HddsProtos.ReplicationType.RATIS)
-        .setFactor(HddsProtos.ReplicationFactor.ONE).build();
+        .setFactor(HddsProtos.ReplicationFactor.ONE)
+        .setRefreshPipeline(true)
+        .build();
     List<OmKeyLocationInfoGroup> omKeyLocationInfoGroupList =
         om.lookupKey(keyArgs).getKeyLocationVersions();
 
@@ -298,9 +300,12 @@ public class TestBlockDeletion {
         cluster.getHddsDatanodes().get(0).getDatanodeStateMachine()
             .getContainer().getContainerSet();
     OzoneTestUtils.performOperationOnKeyContainers((blockID) -> {
-      MetadataStore db = BlockUtils.getDB((KeyValueContainerData) dnContainerSet
-          .getContainer(blockID.getContainerID()).getContainerData(), conf);
-      Assert.assertNotNull(db.get(Longs.toByteArray(blockID.getLocalID())));
+      try(ReferenceCountedDB db =
+          BlockUtils.getDB((KeyValueContainerData) dnContainerSet
+          .getContainer(blockID.getContainerID()).getContainerData(), conf)) {
+        Assert.assertNotNull(db.getStore().get(
+            Longs.toByteArray(blockID.getLocalID())));
+      }
     }, omKeyLocationInfoGroups);
   }
 
@@ -310,13 +315,16 @@ public class TestBlockDeletion {
         cluster.getHddsDatanodes().get(0).getDatanodeStateMachine()
             .getContainer().getContainerSet();
     OzoneTestUtils.performOperationOnKeyContainers((blockID) -> {
-      MetadataStore db = BlockUtils.getDB((KeyValueContainerData) dnContainerSet
-          .getContainer(blockID.getContainerID()).getContainerData(), conf);
-      Assert.assertNull(db.get(Longs.toByteArray(blockID.getLocalID())));
-      Assert.assertNull(db.get(DFSUtil.string2Bytes(
-          OzoneConsts.DELETING_KEY_PREFIX + blockID.getLocalID())));
-      Assert.assertNotNull(DFSUtil
-          .string2Bytes(OzoneConsts.DELETED_KEY_PREFIX + blockID.getLocalID()));
+      try(ReferenceCountedDB db =
+          BlockUtils.getDB((KeyValueContainerData) dnContainerSet
+          .getContainer(blockID.getContainerID()).getContainerData(), conf)) {
+        Assert.assertNull(db.getStore().get(
+            Longs.toByteArray(blockID.getLocalID())));
+        Assert.assertNull(db.getStore().get(DFSUtil.string2Bytes(
+            OzoneConsts.DELETING_KEY_PREFIX + blockID.getLocalID())));
+        Assert.assertNotNull(DFSUtil.string2Bytes(
+            OzoneConsts.DELETED_KEY_PREFIX + blockID.getLocalID()));
+      }
       containerIdsWithDeletedBlocks.add(blockID.getContainerID());
     }, omKeyLocationInfoGroups);
   }

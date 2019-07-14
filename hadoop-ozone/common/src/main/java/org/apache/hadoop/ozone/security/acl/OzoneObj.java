@@ -19,6 +19,10 @@ package org.apache.hadoop.ozone.security.acl;
 
 import com.google.common.base.Preconditions;
 import org.apache.hadoop.ozone.OzoneConsts;
+import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos;
+import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos.OzoneObj.ObjectType;
+
+import static org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos.OzoneObj.StoreType.*;
 
 /**
  * Class representing an unique ozone object.
@@ -35,6 +39,13 @@ public abstract class OzoneObj implements IOzoneObj {
     Preconditions.checkNotNull(storeType);
     this.resType = resType;
     this.storeType = storeType;
+  }
+
+  public static OzoneManagerProtocolProtos.OzoneObj toProtobuf(OzoneObj obj) {
+    return OzoneManagerProtocolProtos.OzoneObj.newBuilder()
+        .setResType(ObjectType.valueOf(obj.getResourceType().name()))
+        .setStoreType(valueOf(obj.getStoreType().name()))
+        .setPath(obj.getPath()).build();
   }
 
   public ResourceType getResourceType() {
@@ -60,6 +71,19 @@ public abstract class OzoneObj implements IOzoneObj {
 
   public abstract String getKeyName();
 
+  /**
+   * Get PrefixName.
+   * A prefix name is like a key name under the bucket but
+   * are mainly used for ACL for now and persisted into a separate prefix table.
+   *
+   * @return prefix name.
+   */
+  public abstract String getPrefixName();
+
+  /**
+   * Get full path of a key or prefix including volume and bucket.
+   * @return full path of a key or prefix.
+   */
   public abstract String getPath();
 
   /**
@@ -68,7 +92,8 @@ public abstract class OzoneObj implements IOzoneObj {
   public enum ResourceType {
     VOLUME(OzoneConsts.VOLUME),
     BUCKET(OzoneConsts.BUCKET),
-    KEY(OzoneConsts.KEY);
+    KEY(OzoneConsts.KEY),
+    PREFIX(OzoneConsts.PREFIX);
 
     /**
      * String value for this Enum.

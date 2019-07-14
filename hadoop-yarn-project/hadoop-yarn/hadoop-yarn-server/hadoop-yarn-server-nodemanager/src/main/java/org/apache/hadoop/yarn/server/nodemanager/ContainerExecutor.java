@@ -290,7 +290,7 @@ public abstract class ContainerExecutor implements Configurable {
     Path pidPath = getPidFilePath(containerId);
 
     if (pidPath == null) {
-      LOG.warn(containerId + " is not active, returning terminated error");
+      LOG.warn("{} is not active, returning terminated error", containerId);
 
       return ExitCode.TERMINATED.getExitCode();
     }
@@ -301,7 +301,7 @@ public abstract class ContainerExecutor implements Configurable {
       throw new IOException("Unable to determine pid for " + containerId);
     }
 
-    LOG.info("Reacquiring " + containerId + " with pid " + pid);
+    LOG.info("Reacquiring {} with pid {}", containerId, pid);
 
     ContainerLivenessContext livenessContext = new ContainerLivenessContext
         .Builder()
@@ -322,7 +322,7 @@ public abstract class ContainerExecutor implements Configurable {
 
     while (!file.exists() && msecLeft >= 0) {
       if (!isContainerActive(containerId)) {
-        LOG.info(containerId + " was deactivated");
+        LOG.info("{} was deactivated", containerId);
 
         return ExitCode.TERMINATED.getExitCode();
       }
@@ -429,16 +429,6 @@ public abstract class ContainerExecutor implements Configurable {
            sb.orderEnvByDependencies(environment).entrySet()) {
         if (!nmVars.contains(env.getKey())) {
           sb.env(env.getKey(), env.getValue());
-        }
-      }
-      // Add the whitelist vars to the environment.  Do this after writing
-      // environment variables so they are not written twice.
-      for(String var : whitelistVars) {
-        if (!environment.containsKey(var)) {
-          String val = getNMEnvVar(var);
-          if (val != null) {
-            environment.put(var, val);
-          }
         }
       }
     }
@@ -764,7 +754,7 @@ public abstract class ContainerExecutor implements Configurable {
       ipAndHost[0] = address.getHostAddress();
       ipAndHost[1] = address.getHostName();
     } catch (UnknownHostException e) {
-      LOG.error("Unable to get Local hostname and ip for " + container
+      LOG.error("Unable to get Local hostname and ip for {}", container
           .getContainerId(), e);
     }
     return ipAndHost;
@@ -792,7 +782,7 @@ public abstract class ContainerExecutor implements Configurable {
    *          the Container
    */
   public void pauseContainer(Container container) {
-    LOG.warn(container.getContainerId() + " doesn't support pausing.");
+    LOG.warn("{} doesn't support pausing.", container.getContainerId());
     throw new UnsupportedOperationException();
   }
 
@@ -803,7 +793,7 @@ public abstract class ContainerExecutor implements Configurable {
    *          the Container
    */
   public void resumeContainer(Container container) {
-    LOG.warn(container.getContainerId() + " doesn't support resume.");
+    LOG.warn("{} doesn't support resume.", container.getContainerId());
     throw new UnsupportedOperationException();
   }
 
@@ -845,7 +835,7 @@ public abstract class ContainerExecutor implements Configurable {
       try {
         pid = ProcessIdFileReader.getProcessId(pidFile);
       } catch (IOException e) {
-        LOG.error("Got exception reading pid from pid-file " + pidFile, e);
+        LOG.error("Got exception reading pid from pid-file {}", pidFile, e);
       }
     }
 

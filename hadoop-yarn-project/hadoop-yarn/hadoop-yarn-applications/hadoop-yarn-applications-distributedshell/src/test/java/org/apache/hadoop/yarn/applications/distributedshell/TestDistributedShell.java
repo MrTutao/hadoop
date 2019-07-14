@@ -18,6 +18,8 @@
 
 package org.apache.hadoop.yarn.applications.distributedshell;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
@@ -61,12 +63,14 @@ import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptReport;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
 import org.apache.hadoop.yarn.api.records.ApplicationReport;
+import org.apache.hadoop.yarn.api.records.ApplicationSubmissionContext;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.ContainerReport;
 import org.apache.hadoop.yarn.api.records.ContainerState;
 import org.apache.hadoop.yarn.api.records.ContainerStatus;
 import org.apache.hadoop.yarn.api.records.ExecutionType;
 import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
+import org.apache.hadoop.yarn.api.records.LogAggregationContext;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.YarnApplicationState;
 import org.apache.hadoop.yarn.api.records.timeline.TimelineDomain;
@@ -96,6 +100,7 @@ import org.apache.hadoop.yarn.server.timelineservice.storage.FileSystemTimelineW
 import org.apache.hadoop.yarn.server.utils.BuilderUtils;
 import org.apache.hadoop.yarn.util.LinuxResourceCalculatorPlugin;
 import org.apache.hadoop.yarn.util.ProcfsBasedProcessTree;
+import org.apache.hadoop.yarn.util.Records;
 import org.apache.hadoop.yarn.util.timeline.TimelineUtils;
 import org.junit.After;
 import org.junit.Assert;
@@ -957,6 +962,29 @@ public class TestDistributedShell {
     Assert.assertTrue(LOG_AM.isDebugEnabled());
   }
 
+  @Test
+  public void testSpecifyingLogAggregationContext() throws Exception {
+    String regex = ".*(foo|bar)\\d";
+    String[] args = {
+        "--jar",
+        APPMASTER_JAR,
+        "--shell_command",
+        "echo",
+        "--rolling_log_pattern",
+        regex
+    };
+    final Client client =
+        new Client(new Configuration(yarnCluster.getConfig()));
+    Assert.assertTrue(client.init(args));
+
+    ApplicationSubmissionContext context =
+        Records.newRecord(ApplicationSubmissionContext.class);
+    client.specifyLogAggregationContext(context);
+    LogAggregationContext logContext = context.getLogAggregationContext();
+    assertEquals(logContext.getRolledLogsIncludePattern(), regex);
+    assertTrue(logContext.getRolledLogsExcludePattern().isEmpty());
+  }
+
   public void testDSShellWithCommands() throws Exception {
 
     String[] args = {
@@ -1808,5 +1836,41 @@ public class TestDistributedShell {
     Client client = new Client(new Configuration(yarnCluster.getConfig()));
     client.init(args);
     client.run();
+  }
+
+
+  @Test
+  public void testDistributedShellCleanup()
+      throws Exception {
+    String appName = "DistributedShellCleanup";
+    String[] args = {
+        "--jar",
+        APPMASTER_JAR,
+        "--num_containers",
+        "1",
+        "--shell_command",
+        Shell.WINDOWS ? "dir" : "ls",
+        "--appname",
+        appName
+    };
+    Configuration config = new Configuration(yarnCluster.getConfig());
+    Client client = new Client(config);
+    client.init(args);
+    client.run();
+    ApplicationId appId = client.getAppId();
+    String relativePath =
+        ApplicationMaster.getRelativePath(appName, appId.toString(), "");
+    FileSystem fs1 = FileSystem.get(config);
+    Path path = new Path(fs1.getHomeDirectory(), relativePath);
+
+    GenericTestUtils.waitFor(() -> {
+      try {
+        return !fs1.exists(path);
+      } catch (IOException e) {
+        return false;
+      }
+    }, 10, 60000);
+
+    assertFalse("Distributed Shell Cleanup failed", fs1.exists(path));
   }
 }

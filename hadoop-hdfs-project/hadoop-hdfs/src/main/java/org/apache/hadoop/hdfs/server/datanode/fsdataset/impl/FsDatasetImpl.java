@@ -28,6 +28,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -47,6 +48,8 @@ import javax.management.ObjectName;
 import javax.management.StandardMBean;
 
 import com.google.common.annotations.VisibleForTesting;
+
+import org.apache.hadoop.HadoopIllegalArgumentException;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.CommonConfigurationKeys;
@@ -291,7 +294,7 @@ class FsDatasetImpl implements FsDatasetSpi<FsVolumeImpl> {
 
     if (volFailuresTolerated < DataNode.MAX_VOLUME_FAILURE_TOLERATED_LIMIT
         || volFailuresTolerated >= volsConfigured) {
-      throw new DiskErrorException("Invalid value configured for "
+      throw new HadoopIllegalArgumentException("Invalid value configured for "
           + "dfs.datanode.failed.volumes.tolerated - " + volFailuresTolerated
           + ". Value configured is either less than maxVolumeFailureLimit or greater than "
           + "to the number of configured volumes (" + volsConfigured + ").");
@@ -419,7 +422,7 @@ class FsDatasetImpl implements FsDatasetSpi<FsVolumeImpl> {
         LOG.error(errorMsg);
         throw new IOException(errorMsg);
       }
-      volumeMap.addAll(replicaMap);
+      volumeMap.mergeAll(replicaMap);
       storageMap.put(sd.getStorageUuid(),
           new DatanodeStorage(sd.getStorageUuid(),
               DatanodeStorage.State.NORMAL,
@@ -787,11 +790,33 @@ class FsDatasetImpl implements FsDatasetSpi<FsVolumeImpl> {
       datanode.getMetrics().incrRamDiskBlocksReadHits();
     }
 
-    if (info != null) {
-      return info.getDataInputStream(seekOffset);
-    } else {
+    if (info == null) {
       throw new IOException("No data exists for block " + b);
     }
+    return getBlockInputStreamWithCheckingPmemCache(info, b, seekOffset);
+  }
+
+  /**
+   * Check whether the replica is cached to persistent memory.
+   * If so, get DataInputStream of the corresponding cache file on pmem.
+   */
+  private InputStream getBlockInputStreamWithCheckingPmemCache(
+      ReplicaInfo info, ExtendedBlock b, long seekOffset) throws IOException {
+    String cachePath = cacheManager.getReplicaCachePath(
+        b.getBlockPoolId(), b.getBlockId());
+    if (cachePath != null) {
+      long addr = cacheManager.getCacheAddress(
+          b.getBlockPoolId(), b.getBlockId());
+      if (addr != -1) {
+        LOG.debug("Get InputStream by cache address.");
+        return FsDatasetUtil.getDirectInputStream(
+            addr, info.getBlockDataLength());
+      }
+      LOG.debug("Get InputStream by cache file path.");
+      return FsDatasetUtil.getInputStreamAndSeek(
+          new File(cachePath), seekOffset);
+    }
+    return info.getDataInputStream(seekOffset);
   }
 
   /**
@@ -1135,7 +1160,7 @@ class FsDatasetImpl implements FsDatasetSpi<FsVolumeImpl> {
         }
       }
       metaOut = new DataOutputStream(new BufferedOutputStream(
-          new FileOutputStream(dstMeta), smallBufferSize));
+          Files.newOutputStream(dstMeta.toPath()), smallBufferSize));
       BlockMetadataHeader.writeHeader(metaOut, checksum);
 
       int offset = 0;
@@ -2313,6 +2338,8 @@ class FsDatasetImpl implements FsDatasetSpi<FsVolumeImpl> {
                      "from LazyWriter.join");
       }
     }
+
+    cacheManager.shutdown();
   }
 
   @Override // FSDatasetMBean

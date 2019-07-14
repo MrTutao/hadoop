@@ -19,6 +19,14 @@
 package org.apache.hadoop.utils.db;
 
 import java.io.IOException;
+import java.util.Iterator;
+import java.util.Map;
+
+import com.google.common.annotations.VisibleForTesting;
+import org.apache.hadoop.utils.db.cache.CacheKey;
+import org.apache.hadoop.utils.db.cache.CacheValue;
+import org.apache.hadoop.utils.db.cache.PartialTableCache;
+import org.apache.hadoop.utils.db.cache.TableCache;
 
 /**
  * Strongly typed table implementation.
@@ -31,13 +39,16 @@ import java.io.IOException;
  */
 public class TypedTable<KEY, VALUE> implements Table<KEY, VALUE> {
 
-  private Table<byte[], byte[]> rawTable;
+  private final Table<byte[], byte[]> rawTable;
 
-  private CodecRegistry codecRegistry;
+  private final CodecRegistry codecRegistry;
 
-  private Class<KEY> keyType;
+  private final Class<KEY> keyType;
 
-  private Class<VALUE> valueType;
+  private final Class<VALUE> valueType;
+
+  private final TableCache<CacheKey<KEY>, CacheValue<VALUE>> cache;
+
 
   public TypedTable(
       Table<byte[], byte[]> rawTable,
@@ -47,6 +58,7 @@ public class TypedTable<KEY, VALUE> implements Table<KEY, VALUE> {
     this.codecRegistry = codecRegistry;
     this.keyType = keyType;
     this.valueType = valueType;
+    cache = new PartialTableCache<>();
   }
 
   @Override
@@ -70,7 +82,40 @@ public class TypedTable<KEY, VALUE> implements Table<KEY, VALUE> {
   }
 
   @Override
+  public boolean isExist(KEY key) throws IOException {
+    CacheValue<VALUE> cacheValue= cache.get(new CacheKey<>(key));
+    return (cacheValue != null && cacheValue.getCacheValue() != null) ||
+        rawTable.isExist(codecRegistry.asRawData(key));
+  }
+
+  /**
+   * Returns the value mapped to the given key in byte array or returns null
+   * if the key is not found.
+   *
+   * Caller's of this method should use synchronization mechanism, when
+   * accessing. First it will check from cache, if it has entry return the
+   * value, otherwise get from the RocksDB table.
+   *
+   * @param key metadata key
+   * @return VALUE
+   * @throws IOException
+   */
+  @Override
   public VALUE get(KEY key) throws IOException {
+    // Here the metadata lock will guarantee that cache is not updated for same
+    // key during get key.
+    CacheValue< VALUE > cacheValue = cache.get(new CacheKey<>(key));
+    if (cacheValue == null) {
+      // If no cache for the table or if it does not exist in cache get from
+      // RocksDB table.
+      return getFromTable(key);
+    } else {
+      // We have a value in cache, return the value.
+      return cacheValue.getCacheValue();
+    }
+  }
+
+  private VALUE getFromTable(KEY key) throws IOException {
     byte[] keyBytes = codecRegistry.asRawData(key);
     byte[] valueBytes = rawTable.get(keyBytes);
     return codecRegistry.asObject(valueBytes, valueType);
@@ -104,6 +149,48 @@ public class TypedTable<KEY, VALUE> implements Table<KEY, VALUE> {
   public void close() throws Exception {
     rawTable.close();
 
+  }
+
+  @Override
+  public void addCacheEntry(CacheKey<KEY> cacheKey,
+      CacheValue<VALUE> cacheValue) {
+    // This will override the entry if there is already entry for this key.
+    cache.put(cacheKey, cacheValue);
+  }
+
+  @Override
+  public CacheValue<VALUE> getCacheValue(CacheKey<KEY> cacheKey) {
+    return cache.get(cacheKey);
+  }
+
+  public Iterator<Map.Entry<CacheKey<KEY>, CacheValue<VALUE>>> cacheIterator() {
+    return cache.iterator();
+  }
+
+  @Override
+  public void cleanupCache(long epoch) {
+    cache.cleanup(epoch);
+  }
+
+  @VisibleForTesting
+  TableCache<CacheKey<KEY>, CacheValue<VALUE>> getCache() {
+    return cache;
+  }
+
+  public Table<byte[], byte[]> getRawTable() {
+    return rawTable;
+  }
+
+  public CodecRegistry getCodecRegistry() {
+    return codecRegistry;
+  }
+
+  public Class<KEY> getKeyType() {
+    return keyType;
+  }
+
+  public Class<VALUE> getValueType() {
+    return valueType;
   }
 
   /**

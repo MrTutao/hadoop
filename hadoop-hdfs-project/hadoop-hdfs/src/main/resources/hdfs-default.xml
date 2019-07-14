@@ -320,6 +320,13 @@
   </property>
 
 <property>
+  <name>dfs.datanode.httpserver.filter.handlers</name>
+  <value>org.apache.hadoop.hdfs.server.datanode.web.RestCsrfPreventionFilterHandler</value>
+  <description>Comma separated list of Netty servlet-style filter handlers to inject into the Datanode WebHDFS I/O path
+  </description>
+</property>
+
+<property>
   <name>dfs.default.chunk.view.size</name>
   <value>32768</value>
   <description>The number of bytes to view for a file on the browser.
@@ -1724,7 +1731,7 @@
     A comma-separated list of paths to use when creating file descriptors that
     will be shared between the DataNode and the DFSClient.  Typically we use
     /dev/shm, so that the file descriptors will not be written to disk.
-    Systems that don't have /dev/shm will fall back to /tmp by default.
+    It tries paths in order until creation of shared memory segment succeeds.
   </description>
 </property>
 
@@ -2544,6 +2551,16 @@
 </property>
 
 <property>
+  <name>dfs.datanode.cache.pmem.dirs</name>
+  <value></value>
+  <description>
+    This value specifies the persistent memory directory used for caching block
+    replica. It matters only if the value of dfs.datanode.cache.loader.class is
+    PmemMappableBlockLoader. Multiple directories separated by "," are acceptable.
+  </description>
+</property>
+
+<property>
   <name>dfs.namenode.list.cache.directives.num.responses</name>
   <value>100</value>
   <description>
@@ -2766,18 +2783,6 @@
     This controls the minimum amount of time
     file descriptors need to sit in the client cache context
     before they can be closed for being inactive for too long.
-  </description>
-</property>
-
-<property>
-  <name>dfs.datanode.shared.file.descriptor.paths</name>
-  <value>/dev/shm,/tmp</value>
-  <description>
-    Comma separated paths to the directory on which
-    shared memory segments are created.
-    The client and the DataNode exchange information via
-    this shared memory segment.
-    It tries paths in order until creation of shared memory segment succeeds.
   </description>
 </property>
 
@@ -3184,6 +3189,15 @@
     tries to get local NN thread dump after local NN becomes
     SERVICE_NOT_RESPONDING or SERVICE_UNHEALTHY.
     If it is set to zero, DFS ZKFC won't get local NN thread dump.
+  </description>
+</property>
+
+<property>
+  <name>dfs.ha.nn.not-become-active-in-safemode</name>
+  <value>false</value>
+  <description>
+    This will prevent safe mode namenodes to become active while other standby
+    namenodes might be ready to serve requests when it is set to true.
   </description>
 </property>
 
@@ -3765,6 +3779,20 @@
 </property>
 
 <property>
+  <name>dfs.client.failover.resolver.useFQDN</name>
+  <value>true</value>
+  <description>
+    Determines whether the resolved result is fully qualified domain name instead
+    of pure IP address(es). The config name can be extended with an optional
+    nameservice ID (of form dfs.client.failover.resolver.impl[.nameservice]) to
+    configure specific nameservices when multiple nameservices exist.
+    In secure environment, this has to be enabled since Kerberos is using fqdn
+    in machine's principal therefore accessing servers by IP won't be recognized
+    by the KDC.
+  </description>
+</property>
+
+<property>
   <name>dfs.client.key.provider.cache.expiry</name>
   <value>864000000</value>
   <description>
@@ -3888,6 +3916,7 @@
   <value>16</value>
   <description>
     Socket cache capacity (in entries) for short-circuit reads.
+    If this value is set to 0, the client socket cache is disabled.
   </description>
 </property>
 
@@ -5301,6 +5330,36 @@
       and include it in block token. The encrypted QOP will be used by DataNode
       as target QOP, overwriting DataNode configuration. This ensures DataNode
       will use exactly the same QOP NameNode and client has already agreed on.
+    </description>
+  </property>
+
+  <property>
+    <name>dfs.encrypt.data.overwrite.downstream.derived.qop</name>
+    <value>false</value>
+    <description>
+      A boolean specifies whether DN should overwrite the downstream
+      QOP in a write pipeline. This is used in the case where client
+      talks to first DN with a QOP, but inter-DN communication needs to be
+      using a different QOP. If set to false, the default behaviour is that
+      inter-DN communication will use the same QOP as client-DN connection.
+    </description>
+  </property>
+
+  <property>
+    <name>dfs.encrypt.data.overwrite.downstream.new.qop</name>
+    <value></value>
+    <description>
+      When dfs.datanode.overwrite.downstream.derived.qop is set to true,
+      this configuration specifies the new QOP to be used to overwrite
+      inter-DN QOP.
+    </description>
+  </property>
+
+  <property>
+    <name>dfs.namenode.blockreport.queue.size</name>
+    <value>1024</value>
+    <description>
+      The queue size of BlockReportProcessingThread in BlockManager.
     </description>
   </property>
 </configuration>

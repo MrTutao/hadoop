@@ -18,6 +18,7 @@
 package org.apache.hadoop.ozone;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.conf.StorageUnit;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.scm.server.StorageContainerManager;
@@ -88,12 +89,12 @@ public interface MiniOzoneCluster {
   void setWaitForClusterToBeReadyTimeout(int timeoutInMs);
 
   /**
-   * Waits/blocks till the cluster is out of chill mode.
+   * Waits/blocks till the cluster is out of safe mode.
    *
    * @throws TimeoutException TimeoutException In case of timeout
    * @throws InterruptedException In case of interrupt while waiting
    */
-  void waitTobeOutOfChillMode() throws TimeoutException, InterruptedException;
+  void waitTobeOutOfSafeMode() throws TimeoutException, InterruptedException;
 
   /**
    * Returns {@link StorageContainerManager} associated with this
@@ -158,12 +159,14 @@ public interface MiniOzoneCluster {
   /**
    * Restarts StorageContainerManager instance.
    *
+   * @param waitForDatanode
    * @throws IOException
    * @throws TimeoutException
    * @throws InterruptedException
    */
-  void restartStorageContainerManager() throws InterruptedException,
-      TimeoutException, IOException, AuthenticationException;
+  void restartStorageContainerManager(boolean waitForDatanode)
+      throws InterruptedException, TimeoutException, IOException,
+      AuthenticationException;
 
   /**
    * Restarts OzoneManager instance.
@@ -179,6 +182,8 @@ public interface MiniOzoneCluster {
    */
   void restartHddsDatanode(int i, boolean waitForDatanode)
       throws InterruptedException, TimeoutException;
+
+  int getHddsDatanodeIndex(DatanodeDetails dn) throws IOException;
 
   /**
    * Restart a particular HddsDatanode.
@@ -249,6 +254,7 @@ public interface MiniOzoneCluster {
     protected Optional<Long> streamBufferFlushSize = Optional.empty();
     protected Optional<Long> streamBufferMaxSize = Optional.empty();
     protected Optional<Long> blockSize = Optional.empty();
+    protected Optional<StorageUnit> streamBufferSizeUnit = Optional.empty();
     // Use relative smaller number of handlers for testing
     protected int numOfOmHandlers = 20;
     protected int numOfScmHandlers = 20;
@@ -431,6 +437,11 @@ public interface MiniOzoneCluster {
 
     public Builder setNumOfOzoneManagers(int numOMs) {
       this.numOfOMs = numOMs;
+      return this;
+    }
+
+    public Builder setStreamBufferSizeUnit(StorageUnit unit) {
+      this.streamBufferSizeUnit = Optional.of(unit);
       return this;
     }
 

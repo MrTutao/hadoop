@@ -20,7 +20,7 @@ package org.apache.hadoop.hdds.scm.container.replication;
 import javax.management.ObjectName;
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.hadoop.hdds.HddsConfigKeys;
@@ -28,6 +28,7 @@ import org.apache.hadoop.metrics2.util.MBeans;
 
 
 import com.google.common.annotations.VisibleForTesting;
+import org.apache.hadoop.utils.Scheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,8 +41,13 @@ public class ReplicationActivityStatus implements
   private static final Logger LOG =
       LoggerFactory.getLogger(ReplicationActivityStatus.class);
 
+  private Scheduler scheduler;
   private AtomicBoolean replicationEnabled = new AtomicBoolean();
   private ObjectName jmxObjectName;
+
+  public ReplicationActivityStatus(Scheduler scheduler) {
+    this.scheduler = scheduler;
+  }
 
   @Override
   public boolean isReplicationEnabled() {
@@ -80,23 +86,17 @@ public class ReplicationActivityStatus implements
 
   /**
    * Waits for
-   * {@link HddsConfigKeys#HDDS_SCM_WAIT_TIME_AFTER_CHILL_MODE_EXIT} and set
+   * {@link HddsConfigKeys#HDDS_SCM_WAIT_TIME_AFTER_SAFE_MODE_EXIT} and set
    * replicationEnabled to start replication monitor thread.
    */
-  public void fireReplicationStart(boolean chillModeStatus,
+  public void fireReplicationStart(boolean safeModeStatus,
       long waitTime) {
-    if (!chillModeStatus) {
-      CompletableFuture.runAsync(() -> {
-        try {
-          Thread.sleep(waitTime);
-        } catch (InterruptedException ex) {
-          LOG.error("Interrupted during wait, replication event is not fired",
-              ex);
-        }
+    if (!safeModeStatus) {
+      scheduler.schedule(() -> {
         setReplicationEnabled(true);
-        LOG.info("Replication Timer sleep for {} ms completed. Enable " +
-            "Replication", waitTime);
-      });
+        LOG.info("Replication Timer sleep for {} ms completed. Enable "
+            + "Replication", waitTime);
+      }, waitTime, TimeUnit.MILLISECONDS);
     }
   }
 

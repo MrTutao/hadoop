@@ -17,11 +17,12 @@
  */
 package org.apache.hadoop.security;
 
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Hashtable;
@@ -45,7 +46,6 @@ import javax.naming.ldap.Rdn;
 import javax.naming.spi.InitialContextFactory;
 
 import com.google.common.collect.Iterators;
-import com.sun.jndi.ldap.LdapCtxFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.conf.Configurable;
@@ -269,8 +269,9 @@ public class LdapGroupsMapping
 
   public static final String LDAP_CTX_FACTORY_CLASS_KEY =
       LDAP_CONFIG_PREFIX + ".ctx.factory.class";
-  public static final Class<? extends LdapCtxFactory>
-      LDAP_CTX_FACTORY_CLASS_DEFAULT = LdapCtxFactory.class;
+
+  public static final String LDAP_CTX_FACTORY_CLASS_DEFAULT =
+      "com.sun.jndi.ldap.LdapCtxFactory";
 
   private static final Logger LOG =
       LoggerFactory.getLogger(LdapGroupsMapping.class);
@@ -313,7 +314,7 @@ public class LdapGroupsMapping
   private boolean useOneQuery;
   private int numAttempts;
   private int numAttemptsBeforeFailover;
-  private Class<? extends InitialContextFactory> ldapCxtFactoryClass;
+  private String ldapCtxFactoryClassName;
 
   /**
    * Returns list of groups for a user.
@@ -632,7 +633,7 @@ public class LdapGroupsMapping
     if (ctx == null) {
       // Set up the initial environment for LDAP connectivity
       Hashtable<String, String> env = new Hashtable<>();
-      env.put(Context.INITIAL_CONTEXT_FACTORY, ldapCxtFactoryClass.getName());
+      env.put(Context.INITIAL_CONTEXT_FACTORY, ldapCtxFactoryClassName);
       env.put(Context.PROVIDER_URL, currentLdapUrl);
       env.put(Context.SECURITY_AUTHENTICATION, "simple");
 
@@ -754,8 +755,18 @@ public class LdapGroupsMapping
     }
     SEARCH_CONTROLS.setReturningAttributes(returningAttributes);
 
-    ldapCxtFactoryClass = conf.getClass(LDAP_CTX_FACTORY_CLASS_KEY,
-        LDAP_CTX_FACTORY_CLASS_DEFAULT, InitialContextFactory.class);
+    // LDAP_CTX_FACTORY_CLASS_DEFAULT is not open to unnamed modules
+    // in Java 11+, so the default value is set to null to avoid
+    // creating the instance for now.
+    Class<? extends InitialContextFactory> ldapCtxFactoryClass =
+        conf.getClass(LDAP_CTX_FACTORY_CLASS_KEY, null,
+        InitialContextFactory.class);
+    if (ldapCtxFactoryClass != null) {
+      ldapCtxFactoryClassName = ldapCtxFactoryClass.getName();
+    } else {
+      // The default value is set afterwards.
+      ldapCtxFactoryClassName = LDAP_CTX_FACTORY_CLASS_DEFAULT;
+    }
 
     this.numAttempts = conf.getInt(LDAP_NUM_ATTEMPTS_KEY,
         LDAP_NUM_ATTEMPTS_DEFAULT);
@@ -836,7 +847,7 @@ public class LdapGroupsMapping
 
     StringBuilder password = new StringBuilder();
     try (Reader reader = new InputStreamReader(
-        new FileInputStream(pwFile), StandardCharsets.UTF_8)) {
+        Files.newInputStream(Paths.get(pwFile)), StandardCharsets.UTF_8)) {
       int c = reader.read();
       while (c > -1) {
         password.append((char)c);

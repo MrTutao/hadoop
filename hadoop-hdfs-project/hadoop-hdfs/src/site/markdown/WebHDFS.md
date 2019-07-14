@@ -104,6 +104,7 @@ In the REST API, the prefix "`/webhdfs/v1`" is inserted in the path and a query 
 
       swebhdfs://<HOST>:<HTTP_PORT>/<PATH>
 
+See also: [SSL Configurations for SWebHDFS](#SSL_Configurations_for_SWebHDFS)
 
 ### HDFS Configuration Options
 
@@ -164,6 +165,56 @@ The following properties control OAuth2 authentication.
 | `dfs.webhdfs.oauth2.refresh.token.expires.ms.since.epoch` | (required if using ConfRefreshTokenBasedAccessTokenProvider) Access token expiration measured in milliseconds since Jan 1, 1970.  *Note this is a different value than provided by OAuth providers and has been munged as described in interface to be suitable for a client application*  |
 | `dfs.webhdfs.oauth2.credential` | (required if using ConfCredentialBasedAccessTokenProvider).  Credential used to obtain initial and subsequent access tokens. |
 
+SSL Configurations for SWebHDFS
+-------------------------------------------------------
+
+To use SWebHDFS FileSystem (i.e. using the swebhdfs protocol), a SSL configuration
+file needs to be specified on the client side. This must specify 3 parameters:
+
+| SSL property | Description |
+|:---- |:---- |
+| `ssl.client.truststore.location` | The local-filesystem location of the trust-store file, containing the certificate for the NameNode. |
+| `ssl.client.truststore.type` | (Optional) The format of the trust-store file. |
+| `ssl.client.truststore.password` | (Optional) Password for the trust-store file. |
+
+The following is an example SSL configuration file (**ssl-client.xml**):
+
+```xml
+<configuration>
+  <property>
+    <name>ssl.client.truststore.location</name>
+    <value>/work/keystore.jks</value>
+    <description>Truststore to be used by clients. Must be specified.</description>
+  </property>
+
+  <property>
+    <name>ssl.client.truststore.password</name>
+    <value>changeme</value>
+    <description>Optional. Default value is "".</description>
+  </property>
+
+  <property>
+    <name>ssl.client.truststore.type</name>
+    <value>jks</value>
+    <description>Optional. Default value is "jks".</description>
+  </property>
+</configuration>
+```
+
+The SSL configuration file must be in the class-path of the client program and the filename needs to be specified in **core-site.xml**:
+
+```xml
+<property>
+  <name>hadoop.ssl.client.conf</name>
+  <value>ssl-client.xml</value>
+  <description>
+    Resource file from which ssl client keystore information will be extracted.
+    This file is looked up in the classpath, typically it should be in Hadoop
+    conf/ directory. Default value is "ssl-client.xml".
+  </description>
+</property>
+```
+
 Proxy Users
 -----------
 
@@ -210,6 +261,7 @@ The following properties control CSRF prevention.
 | `dfs.webhdfs.rest-csrf.custom-header` | The name of a custom header that HTTP requests must send when protection against cross-site request forgery (CSRF) is enabled for WebHDFS by setting dfs.webhdfs.rest-csrf.enabled to true.  The WebHDFS client also uses this property to determine whether or not it needs to send the custom CSRF prevention header in its HTTP requests. | `X-XSRF-HEADER` |
 | `dfs.webhdfs.rest-csrf.methods-to-ignore` | A comma-separated list of HTTP methods that do not require HTTP requests to include a custom header when protection against cross-site request forgery (CSRF) is enabled for WebHDFS by setting dfs.webhdfs.rest-csrf.enabled to true.  The WebHDFS client also uses this property to determine whether or not it needs to send the custom CSRF prevention header in its HTTP requests. | `GET,OPTIONS,HEAD,TRACE` |
 | `dfs.webhdfs.rest-csrf.browser-useragents-regex` | A comma-separated list of regular expressions used to match against an HTTP request's User-Agent header when protection against cross-site request forgery (CSRF) is enabled for WebHDFS by setting dfs.webhdfs.reset-csrf.enabled to true.  If the incoming User-Agent matches any of these regular expressions, then the request is considered to be sent by a browser, and therefore CSRF prevention is enforced.  If the request's User-Agent does not match any of these regular expressions, then the request is considered to be sent by something other than a browser, such as scripted automation.  In this case, CSRF is not a potential attack vector, so the prevention is not enforced.  This helps achieve backwards-compatibility with existing automation that has not been updated to send the CSRF prevention header. | `^Mozilla.*,^Opera.*` |
+| `dfs.datanode.httpserver.filter.handlers` | Comma separated list of Netty servlet-style filter handlers to inject into the Datanode WebHDFS I/O path | `org.apache.hadoop.hdfs.server.datanode.web.RestCsrfPreventionFilterHandler` |
 
 The following is an example `curl` call that uses the `-H` option to include the
 custom header in the request.
@@ -232,6 +284,15 @@ The following properties control WebHDFS retry and failover policy.
 | `dfs.http.client.retry.max.attempts` | Specify the max number of retry attempts for WebHDFS client, if the difference between retried attempts and failovered attempts is larger than the max number of retry attempts, there will be no more retries. | `10` |
 | `dfs.http.client.failover.sleep.base.millis` | Specify the base amount of time in milliseconds upon which the exponentially increased sleep time between retries or failovers is calculated for WebHDFS client. | `500` |
 | `dfs.http.client.failover.sleep.max.millis` | Specify the upper bound of sleep time in milliseconds between retries or failovers for WebHDFS client. | `15000` |
+
+WebHDFS Request Filtering
+-------------------------------------
+One may control directionality of data in the WebHDFS protocol allowing only writing data from insecure networks. To enable, one must ensure `dfs.datanode.httpserver.filter.handlers` includes `org.apache.hadoop.hdfs.server.datanode.web.HostRestrictingAuthorizationFilterHandler`.  Configuration of the `HostRestrictingAuthorizationFilter` is controlled via the following properties.
+
+| Property | Description | Default Value |
+|:---- |:---- |:----
+| `dfs.datanode.httpserver.filter.handlers` | Comma separated list of Netty servlet-style filter handlers to inject into the Datanode WebHDFS I/O path | `org.apache.hadoop.hdfs.server.datanode.web.RestCsrfPreventionFilterHandler` |
+| `dfs.web.authentication.host.allow.rules` | Rules allowing users to read files in the format of _user_,_network/bits_,_path glob_ newline or `|`-separated. Use `*` for a wildcard of all _users_ or _network/bits_. | nothing - defaults to no one may read via WebHDFS |
 
 File and Directory Operations
 -----------------------------

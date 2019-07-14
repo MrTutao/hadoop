@@ -206,6 +206,12 @@ public abstract class FileSystem extends Configured
     CACHE.map.put(new Cache.Key(uri, conf), fs);
   }
 
+  @VisibleForTesting
+  static void removeFileSystemForTesting(URI uri, Configuration conf,
+      FileSystem fs) throws IOException {
+    CACHE.map.remove(new Cache.Key(uri, conf), fs);
+  }
+
   /**
    * Get a FileSystem instance based on the uri, the passed in
    * configuration and the user.
@@ -2241,8 +2247,16 @@ public abstract class FileSystem extends Configured
    * The default implementation returns {@code "/user/$USER/"}.
    */
   public Path getHomeDirectory() {
+    String username;
+    try {
+      username = UserGroupInformation.getCurrentUser().getShortUserName();
+    } catch(IOException ex) {
+      LOGGER.warn("Unable to get user name. Fall back to system property " +
+          "user.name", ex);
+      username = System.getProperty("user.name");
+    }
     return this.makeQualified(
-        new Path(USER_HOME_PREFIX + "/" + System.getProperty("user.name")));
+        new Path(USER_HOME_PREFIX + "/" + username));
   }
 
 

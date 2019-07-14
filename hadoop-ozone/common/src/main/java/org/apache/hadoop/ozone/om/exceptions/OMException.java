@@ -23,6 +23,8 @@ import java.io.IOException;
  * Exception thrown by Ozone Manager.
  */
 public class OMException extends IOException {
+
+  public static final String STATUS_CODE = "STATUS_CODE=";
   private final OMException.ResultCodes result;
 
   /**
@@ -175,7 +177,7 @@ public class OMException extends IOException {
 
     LIST_MULTIPART_UPLOAD_PARTS_FAILED,
 
-    SCM_IN_CHILL_MODE,
+    SCM_IN_SAFE_MODE,
 
     INVALID_REQUEST,
 
@@ -185,6 +187,21 @@ public class OMException extends IOException {
 
     INVALID_KMS_PROVIDER,
 
-    TOKEN_CREATION_ERROR
+    TOKEN_CREATION_ERROR,
+
+    FILE_NOT_FOUND,
+
+    DIRECTORY_NOT_FOUND,
+
+    FILE_ALREADY_EXISTS,
+
+    NOT_A_FILE,
+
+    PERMISSION_DENIED, // Error codes used during acl validation
+
+    TIMEOUT, // Error codes used during acl validation
+
+    PREFIX_NOT_FOUND,
+
   }
 }

@@ -52,12 +52,11 @@ public final class OzoneConsts {
   public static final String OZONE_ACL_USER_TYPE = "user";
   public static final String OZONE_ACL_GROUP_TYPE = "group";
   public static final String OZONE_ACL_WORLD_TYPE = "world";
+  public static final String OZONE_ACL_ANONYMOUS_TYPE = "anonymous";
   public static final String OZONE_ACL_IP_TYPE = "ip";
 
   public static final String OZONE_ACL_READ = "r";
   public static final String OZONE_ACL_WRITE = "w";
-  public static final String OZONE_ACL_READ_WRITE = "rw";
-  public static final String OZONE_ACL_WRITE_READ = "wr";
   public static final String OZONE_ACL_DELETE = "d";
   public static final String OZONE_ACL_LIST = "l";
   public static final String OZONE_ACL_ALL = "a";
@@ -76,6 +75,12 @@ public final class OzoneConsts {
   public static final String OZONE_RESOURCE = "resource";
   public static final String OZONE_USER = "user";
   public static final String OZONE_REQUEST = "request";
+
+  // OM Http server endpoints
+  public static final String OZONE_OM_SERVICE_LIST_HTTP_ENDPOINT =
+      "/serviceList";
+  public static final String OZONE_OM_DB_CHECKPOINT_HTTP_ENDPOINT =
+      "/dbCheckpoint";
 
   // Ozone File System scheme
   public static final String OZONE_URI_SCHEME = "o3fs";
@@ -165,6 +170,8 @@ public final class OzoneConsts {
   public static final String OM_USER_PREFIX = "$";
   public static final String OM_S3_PREFIX ="S3:";
   public static final String OM_S3_VOLUME_PREFIX = "s3";
+  public static final String OM_S3_SECRET = "S3Secret:";
+  public static final String OM_PREFIX = "Prefix:";
 
   /**
    *   Max chunk size limit.
@@ -194,6 +201,11 @@ public final class OzoneConsts {
 
   public static final int INVALID_PORT = -1;
 
+
+  /**
+   * Default SCM Datanode ID file name.
+   */
+  public static final String OZONE_SCM_DATANODE_ID_FILE_DEFAULT = "datanode.id";
 
   // The ServiceListJSONServlet context attribute where OzoneManager
   // instance gets stored.
@@ -279,4 +291,16 @@ public final class OzoneConsts {
 
   // Dummy OMNodeID for OM Clients to use for a non-HA OM setup
   public static final String OM_NODE_ID_DUMMY = "omNodeIdDummy";
+
+  // OM Ratis snapshot file to store the last applied index
+  public static final String OM_RATIS_SNAPSHOT_INDEX = "ratisSnapshotIndex";
+
+  // OM Http request parameter to be used while downloading DB checkpoint
+  // from OM leader to follower
+  public static final String OM_RATIS_SNAPSHOT_BEFORE_DB_CHECKPOINT =
+      "snapshotBeforeCheckpoint";
+
+  public static final String JAVA_TMP_DIR = "java.io.tmpdir";
+  public static final String LOCALHOST = "localhost";
+
 }

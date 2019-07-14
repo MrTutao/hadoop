@@ -61,6 +61,7 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.TimeoutException;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.apache.hadoop.yarn.api.records.YarnApplicationState.FINISHED;
 import static org.apache.hadoop.yarn.service.conf.YarnServiceConf.*;
 import static org.apache.hadoop.yarn.service.exceptions.LauncherExitCodes.EXIT_COMMAND_ARGUMENT_ERROR;
@@ -438,6 +439,8 @@ public class TestYarnNativeServices extends ServiceTestUtils {
     Component component2 = service.getComponent("compb");
     component2.getConfiguration().getEnv().put("key2", "val2");
     client.actionUpgradeExpress(service);
+
+    waitForServiceToBeExpressUpgrading(client, service);
 
     // wait for upgrade to complete
     waitForServiceToBeStable(client, service);
@@ -859,16 +862,32 @@ public class TestYarnNativeServices extends ServiceTestUtils {
   private void checkCompInstancesInOrder(ServiceClient client,
       Service exampleApp) throws IOException, YarnException,
       TimeoutException, InterruptedException {
+    waitForContainers(client, exampleApp);
     Service service = client.getStatus(exampleApp.getName());
     for (Component comp : service.getComponents()) {
       checkEachCompInstancesInOrder(comp, exampleApp.getName());
     }
   }
 
+  private void waitForContainers(ServiceClient client, Service exampleApp)
+      throws TimeoutException, InterruptedException {
+    GenericTestUtils.waitFor(() -> {
+      try {
+        Service service = client.getStatus(exampleApp.getName());
+        for (Component comp : service.getComponents()) {
+          if (comp.getContainers().size() != comp.getNumberOfContainers()) {
+            return false;
+          }
+        }
+        return true;
+      } catch (Exception e) {
+        return false;
+      }
+    }, 2000, 200000);
+  }
+
   private void checkEachCompInstancesInOrder(Component component, String
       serviceName) throws TimeoutException, InterruptedException {
-    long expectedNumInstances = component.getNumberOfContainers();
-    Assert.assertEquals(expectedNumInstances, component.getContainers().size());
     TreeSet<String> instances = new TreeSet<>();
     for (Container container : component.getContainers()) {
       instances.add(container.getComponentInstanceName());
@@ -886,7 +905,7 @@ public class TestYarnNativeServices extends ServiceTestUtils {
 
     int i = 0;
     for (String s : instances) {
-      Assert.assertEquals(component.getName() + "-" + i, s);
+      assertThat(s).isEqualTo(component.getName() + "-" + i);
       i++;
     }
   }

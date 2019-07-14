@@ -37,6 +37,7 @@ This is similar to Namenode for Ozone.
 
 import "hdds.proto";
 import "Security.proto";
+import "FSProtos.proto";
 
 enum Type {
   CreateVolume = 11;
@@ -59,6 +60,7 @@ enum Type {
   ListKeys = 35;
   CommitKey = 36;
   AllocateBlock = 37;
+  ApplyCreateKey = 38;
 
   CreateS3Bucket = 41;
   DeleteS3Bucket = 42;
@@ -73,9 +75,22 @@ enum Type {
 
   ServiceList = 51;
 
+  ApplyInitiateMultiPartUpload = 52;
+
   GetDelegationToken = 61;
   RenewDelegationToken = 62;
   CancelDelegationToken = 63;
+
+  GetFileStatus = 70;
+  CreateDirectory = 71;
+  CreateFile = 72;
+  LookupFile = 73;
+  ListStatus = 74;
+  AddAcl = 75;
+  RemoveAcl = 76;
+  SetAcl = 77;
+  GetAcl = 78;
+
 }
 
 message OMRequest {
@@ -86,6 +101,9 @@ message OMRequest {
   optional string traceID = 2;
 
   required string clientId = 3;
+
+  optional UserInfo userInfo = 4;
+
 
   optional CreateVolumeRequest              createVolumeRequest            = 11;
   optional SetVolumePropertyRequest         setVolumePropertyRequest       = 12;
@@ -107,6 +125,8 @@ message OMRequest {
   optional ListKeysRequest                  listKeysRequest                = 35;
   optional CommitKeyRequest                 commitKeyRequest               = 36;
   optional AllocateBlockRequest             allocateBlockRequest           = 37;
+  optional ApplyCreateKeyRequest            applyCreateKeyRequest          = 38;
+
 
   optional S3CreateBucketRequest            createS3BucketRequest          = 41;
   optional S3DeleteBucketRequest            deleteS3BucketRequest          = 42;
@@ -120,11 +140,21 @@ message OMRequest {
   optional MultipartUploadListPartsRequest  listMultipartUploadPartsRequest = 50;
 
   optional ServiceListRequest               serviceListRequest             = 51;
+  optional MultipartInfoApplyInitiateRequest initiateMultiPartUploadApplyRequest = 52;
 
   optional hadoop.common.GetDelegationTokenRequestProto getDelegationTokenRequest = 61;
   optional hadoop.common.RenewDelegationTokenRequestProto renewDelegationTokenRequest= 62;
   optional hadoop.common.CancelDelegationTokenRequestProto cancelDelegationTokenRequest = 63;
 
+  optional GetFileStatusRequest             getFileStatusRequest           = 70;
+  optional CreateDirectoryRequest           createDirectoryRequest         = 71;
+  optional CreateFileRequest                createFileRequest              = 72;
+  optional LookupFileRequest                lookupFileRequest              = 73;
+  optional ListStatusRequest                listStatusRequest              = 74;
+  optional AddAclRequest                    addAclRequest                  = 75;
+  optional RemoveAclRequest                 removeAclRequest               = 76;
+  optional SetAclRequest                    setAclRequest                  = 77;
+  optional GetAclRequest                    getAclRequest                  = 78;
 }
 
 message OMResponse {
@@ -179,6 +209,16 @@ message OMResponse {
   optional GetDelegationTokenResponseProto getDelegationTokenResponse = 61;
   optional RenewDelegationTokenResponseProto renewDelegationTokenResponse = 62;
   optional CancelDelegationTokenResponseProto cancelDelegationTokenResponse = 63;
+
+  optional GetFileStatusResponse              getFileStatusResponse        = 70;
+  optional CreateDirectoryResponse            createDirectoryResponse      = 71;
+  optional CreateFileResponse                 createFileResponse           = 72;
+  optional LookupFileResponse                 lookupFileResponse           = 73;
+  optional ListStatusResponse                 listStatusResponse           = 74;
+  optional AddAclResponse                    addAclResponse                = 75;
+  optional RemoveAclResponse                 removeAclResponse             = 76;
+  optional SetAclResponse                   setAclResponse                 = 77;
+  optional GetAclResponse                    getAclResponse                = 78;
 }
 
 enum Status {
@@ -222,7 +262,7 @@ enum Status {
     TOKEN_EXPIRED = 35;
     TOKEN_ERROR_OTHER = 36;
     LIST_MULTIPART_UPLOAD_PARTS_FAILED = 37;
-    SCM_IN_CHILL_MODE = 38;
+    SCM_IN_SAFE_MODE = 38;
     INVALID_REQUEST = 39;
 
     BUCKET_ENCRYPTION_KEY_NOT_FOUND = 40;
@@ -230,6 +270,13 @@ enum Status {
     INVALID_KMS_PROVIDER = 42;
     TOKEN_CREATION_ERROR = 43;
 
+    FILE_NOT_FOUND = 44;
+    DIRECTORY_NOT_FOUND = 45;
+    FILE_ALREADY_EXISTS = 46;
+    NOT_A_FILE = 47;
+    PERMISSION_DENIED = 48;
+    TIMEOUT = 49;
+    PREFIX_NOT_FOUND=50;
 }
 
 
@@ -240,14 +287,25 @@ message VolumeInfo {
     optional uint64 quotaInBytes = 4;
     repeated hadoop.hdds.KeyValue metadata = 5;
     repeated OzoneAclInfo volumeAcls = 6;
-    required uint64 creationTime = 7;
+    optional uint64 creationTime = 7;
 }
+
+/**
+    User information which will be extracted during RPC context and used
+    during validating Acl.
+*/
+message UserInfo {
+    optional string userName = 1;
+    optional string remoteAddress = 3;
+}
+
 
 /**
     Creates a volume
 */
 message CreateVolumeRequest {
     required VolumeInfo volumeInfo = 1;
+    optional VolumeList volumeList = 2;
 }
 
 message CreateVolumeResponse {
@@ -265,6 +323,10 @@ message SetVolumePropertyRequest {
     required string volumeName = 1;
     optional string ownerName = 2;
     optional uint64 quotaInBytes = 3;
+    optional string originalOwner = 4;
+    optional VolumeList oldOwnerVolumeList = 5;
+    optional VolumeList newOwnerVolumeList = 6;
+    optional VolumeInfo volumeInfo = 7;
 }
 
 message SetVolumePropertyResponse {
@@ -301,6 +363,8 @@ message InfoVolumeResponse {
 */
 message DeleteVolumeRequest {
     required string volumeName = 1;
+    optional string owner = 2;
+    optional VolumeList volumeList = 3;
 }
 
 message DeleteVolumeResponse {
@@ -335,7 +399,7 @@ message BucketInfo {
     repeated OzoneAclInfo acls = 3;
     required bool isVersionEnabled = 4 [default = false];
     required StorageTypeProto storageType = 5 [default = DISK];
-    required uint64 creationTime = 6;
+    optional uint64 creationTime = 6;
     repeated hadoop.hdds.KeyValue metadata = 7;
     optional BucketEncryptionInfoProto beinfo = 8;
 }
@@ -411,20 +475,76 @@ message BucketArgs {
     repeated hadoop.hdds.KeyValue metadata = 7;
 }
 
+message PrefixInfo {
+    required string name = 1;
+    repeated OzoneAclInfo acls = 2;
+    repeated hadoop.hdds.KeyValue metadata = 3;
+}
+
+message OzoneObj {
+  enum ObjectType {
+    VOLUME = 1;
+    BUCKET = 2;
+    KEY = 3;
+    PREFIX = 4;
+  }
+
+  enum StoreType {
+    OZONE = 1;
+    S3 = 2;
+  }
+  required ObjectType resType = 1;
+  required StoreType storeType = 2  [default = S3];
+  required string path = 3;
+}
+
 message OzoneAclInfo {
     enum OzoneAclType {
         USER = 1;
         GROUP = 2;
         WORLD = 3;
+        ANONYMOUS = 4;
+        CLIENT_IP = 5;
     }
-    enum OzoneAclRights {
-        READ = 1;
-        WRITE = 2;
-        READ_WRITE = 3;
-    }
+
     required OzoneAclType type = 1;
     required string name = 2;
-    required OzoneAclRights rights = 3;
+    required bytes rights = 3;
+}
+
+message GetAclRequest {
+  required OzoneObj obj = 1;
+}
+
+message GetAclResponse {
+  repeated OzoneAclInfo acls = 1;
+}
+
+message AddAclRequest {
+  required OzoneObj obj = 1;
+  required OzoneAclInfo acl = 2;
+}
+
+message AddAclResponse {
+  required bool response = 1;
+}
+
+message RemoveAclRequest {
+  required OzoneObj obj = 1;
+  required OzoneAclInfo acl = 2;
+}
+
+message RemoveAclResponse {
+  required bool response = 1;
+}
+
+message SetAclRequest {
+  required OzoneObj obj = 1;
+  repeated OzoneAclInfo acl = 2;
+}
+
+message SetAclResponse {
+  required bool response = 1;
 }
 
 message CreateBucketRequest {
@@ -432,7 +552,6 @@ message CreateBucketRequest {
 }
 
 message CreateBucketResponse {
-
 }
 
 message InfoBucketRequest {
@@ -446,7 +565,7 @@ message InfoBucketResponse {
 }
 
 message SetBucketPropertyRequest {
-    required BucketArgs bucketArgs = 1;
+    optional BucketArgs bucketArgs = 1;
 }
 
 message SetBucketPropertyResponse {
@@ -486,6 +605,11 @@ message KeyArgs {
     optional string multipartUploadID = 9;
     optional uint32 multipartNumber = 10;
     repeated hadoop.hdds.KeyValue metadata = 11;
+    repeated OzoneAclInfo acls = 12;
+    // This will be set when the request is received in pre-Execute. This
+    // value is used in setting creation/modification time depending on the
+    // request type.
+    optional uint64 modificationTime = 13;
 }
 
 message KeyLocation {
@@ -523,10 +647,70 @@ message KeyInfo {
     optional uint64 latestVersion = 10;
     repeated hadoop.hdds.KeyValue metadata = 11;
     optional FileEncryptionInfoProto fileEncryptionInfo = 12;
+    repeated OzoneAclInfo acls = 13;
+}
+
+message OzoneFileStatusProto {
+    required hadoop.fs.FileStatusProto status = 1;
+}
+
+message GetFileStatusRequest {
+    required KeyArgs keyArgs = 1;
+}
+
+message GetFileStatusResponse {
+    required OzoneFileStatusProto status = 1;
+}
+
+message CreateDirectoryRequest {
+    required KeyArgs keyArgs = 1;
+}
+
+message CreateDirectoryResponse {
+}
+
+message CreateFileRequest {
+    required KeyArgs keyArgs = 1;
+    required bool isRecursive = 2;
+    required bool isOverwrite = 3;
+    // Set in OM HA during preExecute step. This way all OM's use same ID in
+    // OM HA.
+    optional uint64 clientID = 4;
+}
+
+message CreateFileResponse {
+
+    optional KeyInfo keyInfo = 1;
+    // clients' followup request may carry this ID for stateful operations
+    // (similar to a cookie).
+    optional uint64 ID = 2;
+    optional uint64 openVersion = 3;
+}
+
+message LookupFileRequest {
+    required KeyArgs keyArgs = 1;
+}
+
+message LookupFileResponse {
+    optional KeyInfo keyInfo = 1;
+}
+
+message ListStatusRequest {
+    required KeyArgs keyArgs = 1;
+    required bool recursive = 2;
+    required string startKey = 3;
+    required uint64 numEntries = 4;
+}
+
+message ListStatusResponse {
+    repeated OzoneFileStatusProto statuses = 1;
 }
 
 message CreateKeyRequest {
     required KeyArgs keyArgs = 1;
+    // Set in OM HA during preExecute step. This way all OM's use same ID in
+    // OM HA.
+    optional uint64 clientID = 2;
 }
 
 message CreateKeyResponse {
@@ -536,6 +720,11 @@ message CreateKeyResponse {
     // (similar to a cookie).
     optional uint64 ID = 3;
     optional uint64 openVersion = 4;
+}
+
+message ApplyCreateKeyRequest {
+    required CreateKeyRequest createKeyRequest = 1;
+    required CreateKeyResponse createKeyResponse = 2;
 }
 
 message LookupKeyRequest {
@@ -703,6 +892,11 @@ message S3ListBucketsResponse {
 
 message MultipartInfoInitiateRequest {
     required KeyArgs keyArgs = 1;
+}
+
+message MultipartInfoApplyInitiateRequest {
+    required KeyArgs keyArgs = 1;
+    required string multipartUploadID = 2;
 }
 
 message MultipartInfoInitiateResponse {

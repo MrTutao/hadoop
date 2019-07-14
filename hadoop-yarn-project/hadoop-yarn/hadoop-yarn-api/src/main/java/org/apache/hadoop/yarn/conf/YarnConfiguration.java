@@ -402,6 +402,17 @@ public class YarnConfiguration extends Configuration {
   public static final boolean
       DEFAULT_OPPORTUNISTIC_CONTAINER_ALLOCATION_ENABLED = false;
 
+  /**
+   * Maximum number of opportunistic containers to be allocated in
+   * AM heartbeat.
+   */
+  @Unstable
+  public static final String
+      OPP_CONTAINER_MAX_ALLOCATIONS_PER_AM_HEARTBEAT =
+      RM_PREFIX + "opportunistic.max.container-allocation.per.am.heartbeat";
+  public static final int
+      DEFAULT_OPP_CONTAINER_MAX_ALLOCATIONS_PER_AM_HEARTBEAT = -1;
+
   /** Number of nodes to be used by the Opportunistic Container allocator for
    * dispatching containers during container allocation. */
   @Unstable
@@ -1401,6 +1412,14 @@ public class YarnConfiguration extends Configuration {
       DEFAULT_NM_LOG_AGGREGATION_ROLL_MONITORING_INTERVAL_SECONDS = -1;
 
   /**
+   * The allowed hard minimum limit for {@link
+   * YarnConfiguration#NM_LOG_AGGREGATION_ROLL_MONITORING_INTERVAL_SECONDS}.
+   */
+  public static final String MIN_LOG_ROLLING_INTERVAL_SECONDS = NM_PREFIX
+      + "log-aggregation.roll-monitoring-interval-seconds.min";
+  public static final long MIN_LOG_ROLLING_INTERVAL_SECONDS_DEFAULT = 3600;
+
+  /**
    * Define how many aggregated log files per application per NM we can have
    * in remote file system.
    */
@@ -1423,12 +1442,19 @@ public class YarnConfiguration extends Configuration {
   public static final String DEFAULT_NM_REMOTE_APP_LOG_DIR = "/tmp/logs";
 
   /**
-   * The remote log dir will be created at
-   * NM_REMOTE_APP_LOG_DIR/${user}/NM_REMOTE_APP_LOG_DIR_SUFFIX/${appId}
+   * The remote log dir will be created at below location.
+   * NM_REMOTE_APP_LOG_DIR/${user}/bucket_{NM_REMOTE_APP_LOG_DIR_SUFFIX}
+   * /${bucketDir}/${appId}
    */
   public static final String NM_REMOTE_APP_LOG_DIR_SUFFIX = 
     NM_PREFIX + "remote-app-log-dir-suffix";
   public static final String DEFAULT_NM_REMOTE_APP_LOG_DIR_SUFFIX="logs";
+
+  /** Specifies whether Older Application Log Directory is included. */
+  public static final String NM_REMOTE_APP_LOG_DIR_INCLUDE_OLDER =
+      NM_PREFIX + "remote-app-log-dir-include-older";
+  public static final boolean DEFAULT_NM_REMOTE_APP_LOG_DIR_INCLUDE_OLDER =
+      true;
 
   public static final String YARN_LOG_SERVER_URL =
     YARN_PREFIX + "log.server.url";
@@ -1452,7 +1478,7 @@ public class YarnConfiguration extends Configuration {
       + "pmem-check-enabled";
   public static final boolean DEFAULT_NM_PMEM_CHECK_ENABLED = true;
 
-  /** Specifies whether physical memory check is enabled. */
+  /** Specifies whether virtual memory check is enabled. */
   public static final String NM_VMEM_CHECK_ENABLED = NM_PREFIX
       + "vmem-check-enabled";
   public static final boolean DEFAULT_NM_VMEM_CHECK_ENABLED = true;
@@ -2029,6 +2055,16 @@ public class YarnConfiguration extends Configuration {
    * . */
   public static final String DEFAULT_NM_DOCKER_DEFAULT_CONTAINER_NETWORK =
       "host";
+
+  /** The set of runtimes allowed when launching containers using the
+   * DockerContainerRuntime. */
+  public static final String NM_DOCKER_ALLOWED_CONTAINER_RUNTIMES =
+          DOCKER_CONTAINER_RUNTIME_PREFIX + "allowed-container-runtimes";
+
+  /** The set of runtimes allowed when launching containers using the
+   * DockerContainerRuntime. */
+  public static final String[] DEFAULT_NM_DOCKER_ALLOWED_CONTAINER_RUNTIMES =
+      {"runc"};
 
   /** Allow host pid namespace for containers. Use with care. */
   public static final String NM_DOCKER_ALLOW_HOST_PID_NAMESPACE =
@@ -2766,6 +2802,15 @@ public class YarnConfiguration extends Configuration {
 
   public static final int
       DEFAULT_TIMELINE_SERVICE_WRITER_FLUSH_INTERVAL_SECONDS = 60;
+
+  /** The setting that controls the capacity of the queue for async writes
+   * to timeline collector.
+   */
+  public static final String TIMELINE_SERVICE_WRITER_ASYNC_QUEUE_CAPACITY =
+      TIMELINE_SERVICE_PREFIX + "writer.async.queue.capacity";
+
+  public static final int
+      DEFAULT_TIMELINE_SERVICE_WRITER_ASYNC_QUEUE_CAPACITY = 100;
 
   /**
    * The name for setting that controls how long the final value of
@@ -3967,6 +4012,41 @@ public class YarnConfiguration extends Configuration {
       + "numa-awareness.numactl.cmd";
   public static final String DEFAULT_NM_NUMA_AWARENESS_NUMACTL_CMD =
       "/usr/bin/numactl";
+
+  /**
+   * Settings for activities manager.
+   */
+  public static final String RM_ACTIVITIES_MANAGER_PREFIX =
+      RM_PREFIX + "activities-manager.";
+  public static final String RM_ACTIVITIES_MANAGER_SCHEDULER_ACTIVITIES_PREFIX =
+      RM_ACTIVITIES_MANAGER_PREFIX + "scheduler-activities.";
+  public static final String RM_ACTIVITIES_MANAGER_APP_ACTIVITIES_PREFIX =
+      RM_ACTIVITIES_MANAGER_PREFIX + "app-activities.";
+
+  /** The cleanup interval for activities in milliseconds. **/
+  public static final String RM_ACTIVITIES_MANAGER_CLEANUP_INTERVAL_MS =
+      RM_ACTIVITIES_MANAGER_PREFIX + "cleanup-interval-ms";
+  public static final long DEFAULT_RM_ACTIVITIES_MANAGER_CLEANUP_INTERVAL_MS =
+      5000L;
+
+  /** Time to live for scheduler activities in milliseconds. **/
+  public static final String RM_ACTIVITIES_MANAGER_SCHEDULER_ACTIVITIES_TTL_MS =
+      RM_ACTIVITIES_MANAGER_SCHEDULER_ACTIVITIES_PREFIX + "ttl-ms";
+  public static final long
+      DEFAULT_RM_ACTIVITIES_MANAGER_SCHEDULER_ACTIVITIES_TTL_MS = 600000L;
+
+  /** Time to live for app activities in milliseconds. **/
+  public static final String RM_ACTIVITIES_MANAGER_APP_ACTIVITIES_TTL_MS =
+      RM_ACTIVITIES_MANAGER_APP_ACTIVITIES_PREFIX + "ttl-ms";
+  public static final long DEFAULT_RM_ACTIVITIES_MANAGER_APP_ACTIVITIES_TTL_MS =
+      600000L;
+
+  /** Max queue length for app activities. **/
+  public static final String
+      RM_ACTIVITIES_MANAGER_APP_ACTIVITIES_MAX_QUEUE_LENGTH =
+      RM_ACTIVITIES_MANAGER_APP_ACTIVITIES_PREFIX + "max-queue-length";
+  public static final int
+      DEFAULT_RM_ACTIVITIES_MANAGER_APP_ACTIVITIES_MAX_QUEUE_LENGTH = 100;
 
   public YarnConfiguration() {
     super();
